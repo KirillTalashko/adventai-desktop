@@ -1,5 +1,66 @@
+# ============================================================
+#  Сборка / инструменты
+# ============================================================
 .gradle/
 build/
-.idea/
 .kotlin/
+out/
+
+# IntelliJ IDEA / IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# ОС
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Логи / временное
 *.log
+*.tmp
+*.bak
+
+# ============================================================
+#  БЕЗОПАСНОСТЬ — НЕ коммитить (ключи, секреты, приватные данные)
+# ============================================================
+
+# Переменные окружения и ключи API
+.env
+.env.*
+*.env
+local.properties
+secrets.properties
+secrets.*
+secret.*
+apikeys*
+*.apikey
+*.token
+
+# Конфиг приложения с ключами (если вдруг окажется в проекте; обычно лежит в ~/.adventai)
+/config.json
+/.adventai/
+*config.local.*
+
+# Приватные данные агента: память, рабочая память, диалоги
+/memory/
+/working/
+/conversations/
+/profile.md
+/decisions.md
+
+# Криптоключи, сертификаты, хранилища ключей
+*.pem
+*.key
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.crt
+*.cer
+*.gpg
+id_rsa
+id_rsa.*
+credentials*
+*.credentials
