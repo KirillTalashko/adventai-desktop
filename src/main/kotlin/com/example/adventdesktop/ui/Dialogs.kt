@@ -114,6 +114,39 @@ private fun ModelSelector(selected: ModelOption, onSelect: (ModelOption) -> Unit
     }
 }
 
+// ============================== Профиль (отдельное окно) ==============================
+
+@Composable
+fun ProfileDialog(state: ChatState, onClose: () -> Unit) {
+    DialogWindow(
+        onCloseRequest = onClose,
+        state = rememberDialogState(size = DpSize(560.dp, 700.dp)),
+        title = "Профиль"
+    ) {
+        AdventTheme {
+            Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                Column(
+                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Text("Профиль предпочтений", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Как ассистент должен с вами общаться — подмешивается в каждый запрос.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    ProfileForm(
+                        initial = state.profile,
+                        submitLabel = "Сохранить",
+                        onSubmit = { state.saveProfile(it); onClose() },
+                        onCancel = onClose
+                    )
+                }
+            }
+        }
+    }
+}
+
 // ============================== Память (отдельное окно) ==============================
 
 @Composable
@@ -156,7 +189,7 @@ fun MemoryDialog(state: ChatState, onClose: () -> Unit) {
                     MemoryCard("Долговременная память", "профиль и решения · сохраняется между сессиями") {
                         SubLabel("Профиль")
                         if (profileItems.isEmpty()) EmptyHint() else profileItems.forEach { Bullet(it) }
-                        AddRow("Добавить факт о пользователе…", "Добавить") { state.addProfile(it); refresh++ }
+                        AddRow("Добавить факт о пользователе…", "Добавить") { state.addProfileFact(it); refresh++ }
 
                         Spacer(Modifier.size(2.dp))
                         SubLabel("Решения")

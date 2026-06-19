@@ -30,6 +30,17 @@ internal class FileMemoryStore(private val store: FileStore) : MemoryStore {
         store.writeText(profileFile, updated)
     }
 
+    override fun removeProfile(line: String) {
+        val clean = line.trim().removePrefix("-").trim()
+        if (clean.isEmpty()) return
+        val current = store.readText(profileFile).trim()
+        if (current.isEmpty()) return
+        val kept = current.lines().filterNot { it.trim().removePrefix("-").trim().equals(clean, ignoreCase = true) }
+        // Если фактов не осталось (только заголовок) — сбросить файл в «пустое» состояние.
+        if (kept.any { it.trim().startsWith("-") }) store.writeText(profileFile, kept.joinToString("\n").trim())
+        else store.delete(profileFile)
+    }
+
     override fun addDecision(decision: String) {
         val clean = decision.trim().removePrefix("-").trim()
         if (clean.isEmpty()) return

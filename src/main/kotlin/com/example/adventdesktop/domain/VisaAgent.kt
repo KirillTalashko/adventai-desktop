@@ -32,9 +32,10 @@ class VisaAgent(
         conversation: Conversation,
         working: WorkingMemory,
         longTerm: LongTermMemory,
+        profile: UserProfile?,
         contextFill: Float
     ): Result<AgentTurn> = runCatching {
-        val assembled = assembler.assemble(conversation, working, longTerm, contextFill)
+        val assembled = assembler.assemble(conversation, working, longTerm, profile, contextFill)
         val response = gateway.complete(assembled.messages)
         AgentTurn(AgentReply(response.text, response.usage), assembled.derived)
     }

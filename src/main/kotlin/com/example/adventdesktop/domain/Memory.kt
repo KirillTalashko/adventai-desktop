@@ -26,6 +26,7 @@ class ContextAssembler(
         conversation: Conversation,
         working: WorkingMemory,
         longTerm: LongTermMemory,
+        profile: UserProfile?,
         contextFill: Float
     ): Assembled {
         val history = conversation.messages
@@ -33,7 +34,7 @@ class ContextAssembler(
 
         // Окно ещё свободно — отправляем всю историю как есть (ничего не теряем).
         if (contextFill < SUMMARY_FILL || history.size <= windowSize) {
-            return Assembled(listOf(system(systemBlock(working, longTerm, ""))) + history, derived, 0)
+            return Assembled(listOf(system(systemBlock(working, longTerm, "", profile))) + history, derived, 0)
         }
 
         // Заполнение высокое: свернуть старый хвост (за пределами последних N) в резюме.
@@ -42,12 +43,15 @@ class ContextAssembler(
             val text = runCatching { summarize(history.take(oldCount)) }.getOrNull()?.trim()
             if (!text.isNullOrEmpty()) derived = derived.copy(summary = text, summarizedCount = oldCount)
         }
-        val sys = systemBlock(working, longTerm, derived.summary)
+        val sys = systemBlock(working, longTerm, derived.summary, profile)
         return Assembled(listOf(system(sys)) + history.takeLast(windowSize), derived, oldCount)
     }
 
-    private fun systemBlock(working: WorkingMemory, longTerm: LongTermMemory, summary: String): String = buildString {
+    private fun systemBlock(working: WorkingMemory, longTerm: LongTermMemory, summary: String, profile: UserProfile?): String = buildString {
         append(systemPrompt)
+        if (profile != null) {
+            append("\n\n[ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ — как отвечать]\n").append(profile.toPromptBlock())
+        }
         if (!longTerm.isEmpty) {
             append("\n\n[ДОЛГОВРЕМЕННАЯ ПАМЯТЬ — профиль и решения; считай это фактами о пользователе]\n")
             if (longTerm.profile.isNotBlank()) append(longTerm.profile.trim()).append('\n')
