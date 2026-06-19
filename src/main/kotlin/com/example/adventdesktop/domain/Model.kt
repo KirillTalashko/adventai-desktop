@@ -23,13 +23,14 @@ data class Derived(
     val factsCount: Int = 0
 )
 
-/** Диалог целиком (краткосрочная память + производная + метаданные). */
+/** Диалог целиком (краткосрочная память + производная + состояние задачи + метаданные). */
 data class Conversation(
     val id: String,
     val title: String,
     val createdAtMs: Long,
     val messages: List<Message>,
-    val derived: Derived = Derived()
+    val derived: Derived = Derived(),
+    val task: TaskContext? = null
 ) {
     fun withMessage(message: Message): Conversation = copy(messages = messages + message)
 }

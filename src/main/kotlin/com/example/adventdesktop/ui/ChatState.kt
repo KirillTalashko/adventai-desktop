@@ -6,12 +6,14 @@ import androidx.compose.runtime.setValue
 import com.example.adventdesktop.data.AccountStore
 import com.example.adventdesktop.data.ConfigStore
 import com.example.adventdesktop.data.DesktopConfig
+import com.example.adventdesktop.data.DocStore
 import com.example.adventdesktop.data.LlmClient
 import com.example.adventdesktop.data.ModelOption
 import com.example.adventdesktop.data.Models
 import com.example.adventdesktop.data.ProfileStore
 import com.example.adventdesktop.data.resolveLlmConfig
 import com.example.adventdesktop.domain.Account
+import com.example.adventdesktop.domain.Awaiting
 import com.example.adventdesktop.domain.Conversation
 import com.example.adventdesktop.domain.ConversationMeta
 import com.example.adventdesktop.domain.ConversationRepository
@@ -20,15 +22,24 @@ import com.example.adventdesktop.domain.MemoryExtractor
 import com.example.adventdesktop.domain.MemoryStore
 import com.example.adventdesktop.domain.Message
 import com.example.adventdesktop.domain.Role
+import com.example.adventdesktop.domain.TaskContext
+import com.example.adventdesktop.domain.TaskOrchestrator
+import com.example.adventdesktop.domain.TaskState
+import com.example.adventdesktop.domain.TaskStep
 import com.example.adventdesktop.domain.UserProfile
 import com.example.adventdesktop.domain.VisaAgent
 import com.example.adventdesktop.domain.WorkingMemory
+import com.example.adventdesktop.domain.transitionTo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import java.io.File
 
 private const val DEFAULT_TITLE = "Новая сессия"
 private const val TITLE_MAX = 42
 private const val EXTRACT_WINDOW = 4
+
+/** Предел авто-продвижения стадий за один запуск (защита от зацикливания, напр. бесконечного revise). */
+private const val MAX_AUTO_CHAIN = 16
 
 /**
  * Держатель UI-состояния и оркестратор. Управляет локальными аккаунтами (Day 12): у каждого свои
@@ -46,6 +57,7 @@ class ChatState(
         private set
     private var client: LlmClient? = null
     private var agent: VisaAgent? = null
+    private var orchestrator: TaskOrchestrator? = null
     private var extractorClient: LlmClient? = null
     private var memoryExtractor: MemoryExtractor? = null
 
@@ -62,6 +74,15 @@ class ChatState(
     private var conversations: ConversationRepository? = null
     private var memory: MemoryStore? = null
     private var profileStore: ProfileStore? = null
+    private var docStore: DocStore? = null
+
+    /** Момент старта текущей операции стадии (для таймера в статус-строке). */
+    var opStartedAtMs by mutableStateOf(0L)
+        private set
+
+    /** Длительность последней завершённой операции стадии, сек (для статус-строки в покое). */
+    var lastOpSeconds by mutableStateOf(0L)
+        private set
 
     // --- состояние чата ---
     var conversationList by mutableStateOf<List<ConversationMeta>>(emptyList())
@@ -88,7 +109,9 @@ class ChatState(
     }
 
     val messages: List<Message> get() = current?.messages ?: emptyList()
+    val task: TaskContext? get() = current?.task
     val hasKey: Boolean get() = agent != null
+    val lastPromptTokens: Int get() = messages.lastOrNull { it.usage != null }?.usage?.prompt ?: 0
     val sessionTokens: Int get() = messages.sumOf { it.usage?.total ?: 0 }
     val sessionCost: Double
         get() = messages.sumOf { m -> m.usage?.let { model.costUsd(it.prompt, it.completion) } ?: 0.0 }
@@ -129,6 +152,7 @@ class ChatState(
         conversations = null
         memory = null
         profileStore = null
+        docStore = null
         current = null
         conversationList = emptyList()
         profile = UserProfile()
@@ -172,6 +196,7 @@ class ChatState(
         conversations = accounts.conversations(account.id)
         memory = accounts.memory(account.id)
         profileStore = accounts.profiles(account.id)
+        docStore = accounts.docs(account.id)
         profile = profileStore?.load() ?: UserProfile(name = account.name)
         current = conversations?.latest() ?: conversations?.create(DEFAULT_TITLE)
         refreshList()
@@ -220,6 +245,240 @@ class ChatState(
             loading = false
         }
     }
+
+    // --- задача (конечный автомат, День 13) ---
+
+    /** Начать задачу: добавить формулировку как сообщение, перевести диалог в режим задачи и запустить INTAKE. */
+    fun startTask(text: String) {
+        val raw = text.trim()
+        val conv = current ?: return
+        val repo = conversations ?: return
+        if (raw.isEmpty() || loading || orchestrator == null) {
+            if (orchestrator == null) error = noKeyError()
+            return
+        }
+        input = ""
+        error = null
+        val isFirstUser = conv.messages.none { it.role == Role.User }
+        var updated = conv.withMessage(Message(Role.User, raw))
+        if (isFirstUser) updated = updated.copy(title = titleFrom(raw))
+        updated = updated.copy(task = TaskContext(task = raw))   // state = INTAKE
+        current = updated
+        repo.save(updated)
+        refreshList()
+        runStage { o, c, h, p -> o.intake(c, h, p) }
+    }
+
+    /** Кнопка «Продолжить» — один ход текущей стадии (когда ничего не ждём от пользователя). */
+    fun advanceTask() {
+        val ctx = current?.task ?: return
+        if (loading || ctx.isDone || ctx.paused || ctx.awaiting != Awaiting.NONE) return
+        when (ctx.state) {
+            TaskState.INTAKE -> runStage { o, c, h, p -> o.intake(c, h, p) }
+            TaskState.PLANNING -> runStage { o, c, h, p -> o.proposeOptions(c, h, p) }
+            TaskState.EXECUTION, TaskState.VALIDATION -> runStage { o, c, h, p -> o.step(c, h, p) }
+            TaskState.DONE -> {}
+        }
+    }
+
+    /** Ответ пользователя интервьюеру на этапе INTAKE (Awaiting.ANSWER). */
+    fun answerTask(text: String) {
+        val raw = text.trim()
+        val conv = current ?: return
+        val repo = conversations ?: return
+        val ctx = conv.task ?: return
+        if (raw.isEmpty() || loading || ctx.awaiting != Awaiting.ANSWER) return
+        input = ""
+        val updated = conv.withMessage(Message(Role.User, raw)).copy(task = ctx.copy(awaiting = Awaiting.NONE, prompt = ""))
+        current = updated
+        repo.save(updated)
+        refreshList()
+        runStage { o, c, h, p -> o.intake(c, h, p) }
+    }
+
+    /** Выбор подхода из 4 вариантов (Awaiting.CHOICE) → построение плана. */
+    fun chooseApproach(approach: String) {
+        val chosen = approach.trim()
+        val conv = current ?: return
+        val repo = conversations ?: return
+        val ctx = conv.task ?: return
+        if (chosen.isEmpty() || loading || ctx.awaiting != Awaiting.CHOICE) return
+        input = ""
+        val updated = conv.withMessage(Message(Role.User, "Выбран подход: $chosen"))
+            .copy(task = ctx.copy(approach = chosen, awaiting = Awaiting.NONE, options = emptyList(), prompt = ""))
+        current = updated
+        repo.save(updated)
+        refreshList()
+        runStage { o, c, h, p -> o.buildPlan(c, h, p) }
+    }
+
+    /** Приложить файл (кнопка «+»). Если ждали документ — он закрывает запрос и шаг перевыполняется. */
+    fun provideDocument(file: File) {
+        val conv = current ?: return
+        val repo = conversations ?: return
+        val ctx = conv.task ?: return
+        val ds = docStore ?: return
+        if (loading) return
+        val saved = ds.save(file) ?: run { error = "Не удалось сохранить файл"; return }
+        val label = if (ctx.awaiting == Awaiting.DOCUMENT && ctx.prompt.isNotBlank()) ctx.prompt else saved
+        val entry = "$label → $saved"
+        // Снять из «ожидают загрузки», если этот документ откладывали ранее.
+        val pending = ctx.pending.filterNot { label.isNotBlank() && it.contains(label, ignoreCase = true) }
+        val updated = conv.withMessage(Message(Role.User, "Приложен документ: $saved ($label)"))
+            .copy(task = ctx.copy(docs = ctx.docs + entry, pending = pending, awaiting = Awaiting.NONE, prompt = ""))
+        current = updated
+        repo.save(updated)
+        refreshList()
+        if (ctx.awaiting == Awaiting.DOCUMENT) runStage { o, c, h, p -> o.step(c, h, p) }
+    }
+
+    /** Приложить файл под КОНКРЕТНЫЙ документ из «ожидают загрузки» (в т.ч. в DONE): снять его из pending. */
+    fun provideDocumentFor(label: String, file: File) {
+        val conv = current ?: return
+        val repo = conversations ?: return
+        val ctx = conv.task ?: return
+        val ds = docStore ?: return
+        if (loading) return
+        val saved = ds.save(file) ?: run { error = "Не удалось сохранить файл"; return }
+        val updated = conv.withMessage(Message(Role.User, "Приложен документ: $saved ($label)"))
+            .copy(task = ctx.copy(docs = ctx.docs + "$label → $saved", pending = ctx.pending - label))
+        current = updated
+        repo.save(updated)
+        refreshList()
+    }
+
+    /**
+     * «Приложу позже»: документ откладывается, шаг идёт дальше, а необходимость дозагрузки запоминается
+     * в рабочей памяти (для полной картины задачи) и в [TaskContext.pending] (видно валидатору в [STATE]).
+     */
+    fun deferDocument() {
+        val conv = current ?: return
+        val repo = conversations ?: return
+        val ctx = conv.task ?: return
+        if (loading || ctx.awaiting != Awaiting.DOCUMENT) return
+        val doc = ctx.prompt.ifBlank { "документ" }
+        memory?.addConstraint(conv.id, "Дозагрузить документ: $doc")
+        val advanced = ctx.copy(
+            done = ctx.done + "Шаг ${ctx.step + 1}: выполнен, ожидает документ «$doc» (приложить позже)",
+            pending = ctx.pending + doc, step = ctx.step + 1, awaiting = Awaiting.NONE, prompt = ""
+        )
+        val nextCtx = if (advanced.total > 0 && advanced.step >= advanced.total) advanced.transitionTo(TaskState.VALIDATION) else advanced
+        val updated = conv.copy(task = nextCtx)
+        current = updated
+        repo.save(updated)
+        refreshList()
+    }
+
+    fun setTaskPaused(paused: Boolean) {
+        val conv = current ?: return
+        val ctx = conv.task ?: return
+        val updated = conv.copy(task = ctx.copy(paused = paused))
+        current = updated
+        conversations?.save(updated)
+    }
+
+    /** Сброс задачи: диалог возвращается в режим свободного чата, сообщения сохраняются. */
+    fun resetTask() {
+        val conv = current ?: return
+        if (conv.task == null) return
+        val updated = conv.copy(task = null)
+        current = updated
+        conversations?.save(updated)
+    }
+
+    /**
+     * Единая точка ввода (кнопки запуска нет — задача часть агента). Нет задачи → старт; уточнение →
+     * ответ; выбор → свой вариант; завершено → новая задача; иначе — реплика и ход стадии.
+     */
+    fun submitComposer() {
+        val raw = input.trim()
+        if (raw.isEmpty() || loading) return
+        val t = task
+        when {
+            t == null -> startTask(raw)
+            t.awaiting == Awaiting.ANSWER -> answerTask(raw)
+            t.awaiting == Awaiting.CHOICE -> chooseApproach(raw)
+            t.isDone -> askDuringTask(raw)        // задача завершена — отвечаем как помощник по итогу
+            else -> askDuringTask(raw)            // во время задачи: вопрос/реплика → ответ, шаги двигает кнопка
+        }
+    }
+
+    /** Реплика/вопрос во время задачи: агент ОТВЕЧАЕТ по контексту (#2), не продвигая автомат. */
+    private fun askDuringTask(text: String) {
+        val conv = current ?: return
+        val repo = conversations ?: return
+        if (conv.task == null) return
+        input = ""
+        val updated = conv.withMessage(Message(Role.User, text))
+        current = updated
+        repo.save(updated)
+        refreshList()
+        runStage { o, c, h, p -> o.assist(c, h, p) }
+    }
+
+    /**
+     * Запуск стадии с АВТО-ПРОДВИЖЕНИЕМ: выполняет переданную стадию, затем сам цепляет следующие
+     * ([nextAutoAction]) до точки, где нужен пользователь (ответ/выбор) или задача завершена. Так не
+     * нужно жать «предложить план» и «следующий шаг» — агент идёт сам. Лимит [MAX_AUTO_CHAIN] защищает
+     * от зацикливания.
+     */
+    private fun runStage(firstAction: suspend (TaskOrchestrator, TaskContext, List<Message>, UserProfile?) -> Result<TaskStep>) {
+        val conv0 = current ?: return
+        val repo = conversations ?: return
+        if (conv0.task == null) return
+        val orch = orchestrator
+        if (loading) return
+        if (orch == null) { error = noKeyError(); return }
+        error = null
+        loading = true
+        opStartedAtMs = System.currentTimeMillis()
+        val userProfile = profile
+        scope.launch {
+            var conv = conv0
+            var next: (suspend (TaskOrchestrator, TaskContext, List<Message>, UserProfile?) -> Result<TaskStep>)? = firstAction
+            var chain = 0
+            while (chain < MAX_AUTO_CHAIN) {
+                val act = next ?: break
+                val ctx = conv.task ?: break
+                val result = act(orch, ctx, conv.messages, userProfile)
+                if (result.isFailure) { error = result.exceptionOrNull()?.message ?: "Ошибка запроса"; break }
+                val taskStep = result.getOrThrow()
+                var updated = conv
+                if (taskStep.reply.text.isNotBlank()) {
+                    updated = updated.withMessage(Message(Role.Assistant, taskStep.reply.text, usage = taskStep.reply.usage))
+                }
+                // cancel — простой вопрос: ответ дан, режим задачи снимаем (свободный чат).
+                updated = updated.copy(task = if (taskStep.cancel) null else taskStep.context)
+                if (current?.id == updated.id) current = updated
+                repo.save(updated)
+                refreshList()
+                conv = updated
+                next = conv.task?.let { nextAutoAction(it) }
+                chain++
+            }
+            scope.launch { runExtraction(conv) }
+            lastOpSeconds = ((System.currentTimeMillis() - opStartedAtMs) / 1000).coerceAtLeast(0)
+            loading = false
+        }
+    }
+
+    /**
+     * Авто-цепляются только «служебные» переходы: уточнение → предложить варианты, и последний
+     * шаг → проверка. Шаги ВЫПОЛНЕНИЯ идут пошагово (по «Продолжить»), а перед первым шагом —
+     * чекпоинт плана (пользователь видит план и запускает выполнение). Документы не блокируют.
+     */
+    private fun nextAutoAction(
+        ctx: TaskContext
+    ): (suspend (TaskOrchestrator, TaskContext, List<Message>, UserProfile?) -> Result<TaskStep>)? {
+        if (ctx.isDone || ctx.awaiting != Awaiting.NONE) return null
+        return when (ctx.state) {
+            TaskState.PLANNING -> if (ctx.plan.isEmpty()) ({ o, c, h, p -> o.proposeOptions(c, h, p) }) else null
+            TaskState.VALIDATION -> ({ o, c, h, p -> o.step(c, h, p) })
+            else -> null   // EXECUTION — пошагово вручную; INTAKE — ждём ответ
+        }
+    }
+
+    private fun noKeyError() = "Нет ключа для провайдера «${model.provider}». Откройте «Настройки»."
 
     private suspend fun runExtraction(conv: Conversation) {
         val extractor = memoryExtractor ?: return
@@ -287,6 +546,7 @@ class ChatState(
         val llm = resolveLlmConfig(model, config)
         client = llm?.let { LlmClient(it) }
         agent = client?.let { VisaAgent(it) }
+        orchestrator = client?.let { TaskOrchestrator(it) }
         val extractorLlm = resolveLlmConfig(Models.byId("deepseek-chat"), config)
         extractorClient = extractorLlm?.let { LlmClient(it) }
         memoryExtractor = extractorClient?.let { MemoryExtractor(it) }
