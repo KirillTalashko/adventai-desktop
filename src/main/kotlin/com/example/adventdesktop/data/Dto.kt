@@ -1,6 +1,7 @@
 package com.example.adventdesktop.data
 
 import com.example.adventdesktop.domain.Account
+import com.example.adventdesktop.domain.Awaiting
 import com.example.adventdesktop.domain.Conversation
 import com.example.adventdesktop.domain.ConversationMeta
 import com.example.adventdesktop.domain.Derived
@@ -8,6 +9,8 @@ import com.example.adventdesktop.domain.FormatPref
 import com.example.adventdesktop.domain.Message
 import com.example.adventdesktop.domain.ResponseLength
 import com.example.adventdesktop.domain.Role
+import com.example.adventdesktop.domain.TaskContext
+import com.example.adventdesktop.domain.TaskState
 import com.example.adventdesktop.domain.TokenUsage
 import com.example.adventdesktop.domain.Tone
 import com.example.adventdesktop.domain.UserProfile
@@ -44,12 +47,31 @@ internal data class DerivedDto(
 )
 
 @Serializable
+internal data class TaskContextDto(
+    val task: String = "",
+    val state: String = "INTAKE",
+    val awaiting: String = "NONE",
+    val prompt: String = "",
+    val options: List<String> = emptyList(),
+    val approach: String = "",
+    val plan: List<String> = emptyList(),
+    val step: Int = 0,
+    val done: List<String> = emptyList(),
+    val docs: List<String> = emptyList(),
+    val pending: List<String> = emptyList(),
+    val note: String = "",
+    val revises: Int = 0,
+    val paused: Boolean = false
+)
+
+@Serializable
 internal data class ConversationDto(
     val id: String,
     val title: String,
     val createdAtMs: Long,
     val messages: List<MessageDto> = emptyList(),
-    val derived: DerivedDto = DerivedDto()
+    val derived: DerivedDto = DerivedDto(),
+    val task: TaskContextDto? = null
 )
 
 @Serializable
@@ -83,11 +105,25 @@ internal fun Message.toDto(): MessageDto = MessageDto(role.wire, text, createdAt
 internal fun DerivedDto.toDomain() = Derived(summary, summarizedCount, facts, factsCount)
 internal fun Derived.toDto() = DerivedDto(summary, summarizedCount, facts, factsCount)
 
+internal fun TaskContextDto.toDomain() = TaskContext(
+    task = task,
+    state = TaskState.entries.firstOrNull { it.name == state } ?: TaskState.INTAKE,
+    awaiting = Awaiting.entries.firstOrNull { it.name == awaiting } ?: Awaiting.NONE,
+    prompt = prompt, options = options, approach = approach,
+    plan = plan, step = step, done = done, docs = docs, pending = pending, note = note, revises = revises, paused = paused
+)
+
+internal fun TaskContext.toDto() = TaskContextDto(
+    task = task, state = state.name, awaiting = awaiting.name, prompt = prompt, options = options,
+    approach = approach, plan = plan, step = step, done = done, docs = docs, pending = pending, note = note,
+    revises = revises, paused = paused
+)
+
 internal fun ConversationDto.toDomain(): Conversation =
-    Conversation(id, title, createdAtMs, messages.map { it.toDomain() }, derived.toDomain())
+    Conversation(id, title, createdAtMs, messages.map { it.toDomain() }, derived.toDomain(), task?.toDomain())
 
 internal fun Conversation.toDto(): ConversationDto =
-    ConversationDto(id, title, createdAtMs, messages.map { it.toDto() }, derived.toDto())
+    ConversationDto(id, title, createdAtMs, messages.map { it.toDto() }, derived.toDto(), task?.toDto())
 
 internal fun ConversationMetaDto.toDomain() = ConversationMeta(id, title, updatedAtMs)
 

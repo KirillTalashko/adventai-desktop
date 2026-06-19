@@ -13,7 +13,7 @@
 | [MEMORY_AGENT.md](MEMORY_AGENT.md) | фоновый агент авто-наполнения памяти (deepseek-chat) |
 | [PERSONALIZATION.md](PERSONALIZATION.md) | профиль предпочтений + локальные аккаунты + онбординг (День 12) |
 | [PROMPTING.md](PROMPTING.md) | промпт-инжиниринг, системный промпт, формат `[checklist]` |
-| [STATE_MACHINE.md](STATE_MACHINE.md) | состояние задачи и инварианты (роадмап) |
+| [STATE_MACHINE.md](STATE_MACHINE.md) | конечный автомат задачи: агент на стадию, переходы в коде, pause/resume (День 13) |
 | [ANTIPATTERNS.md](ANTIPATTERNS.md) | чего не делать |
 
 Точка входа проекта — `../CLAUDE.md`. Мета-промпт по дизайну — `../DESIGN_BRIEF.md`.

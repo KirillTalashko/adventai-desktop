@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -38,6 +39,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.VerticalDivider
@@ -61,6 +63,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.adventdesktop.data.Models
+import com.example.adventdesktop.domain.Awaiting
 import com.example.adventdesktop.domain.Message
 import com.example.adventdesktop.domain.Role
 import com.example.adventdesktop.domain.TokenUsage
@@ -176,6 +179,7 @@ private fun Sidebar(
 @Composable
 private fun AccountSwitcher(state: ChatState, onProfile: () -> Unit) {
     var open by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxWidth()) {
         Surface(
             onClick = { open = true },
@@ -216,6 +220,26 @@ private fun AccountSwitcher(state: ChatState, onProfile: () -> Unit) {
             DropdownMenuItem(text = { Text("Новый аккаунт") }, onClick = { state.startNewAccount(); open = false })
             HorizontalDivider()
             DropdownMenuItem(text = { Text("Выйти") }, onClick = { state.logout(); open = false })
+            DropdownMenuItem(
+                text = { Text("Удалить аккаунт", color = MaterialTheme.colorScheme.error) },
+                onClick = { confirmDelete = true; open = false }
+            )
+        }
+        if (confirmDelete) {
+            val acc = state.activeAccount
+            AlertDialog(
+                onDismissRequest = { confirmDelete = false },
+                title = { Text("Удалить аккаунт?") },
+                text = {
+                    Text("Аккаунт «${acc?.name ?: "—"}» и все его данные (диалоги, память, профиль, документы) будут удалены без возможности восстановления.")
+                },
+                confirmButton = {
+                    TextButton(onClick = { acc?.let { state.deleteAccount(it.id) }; confirmDelete = false }) {
+                        Text("Удалить", color = MaterialTheme.colorScheme.error)
+                    }
+                },
+                dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Отмена") } }
+            )
         }
     }
 }
@@ -255,8 +279,9 @@ private fun ChatPane(state: ChatState, modifier: Modifier) {
                 EmptyState(state)
             } else {
                 val listState = rememberLazyListState()
-                val count = state.messages.size + if (state.loading) 1 else 0
-                LaunchedEffect(count) { if (count > 0) listState.animateScrollToItem(count - 1) }
+                val taskActive = state.task != null
+                val count = state.messages.size + if (taskActive) 2 else if (state.loading) 1 else 0
+                LaunchedEffect(count, state.task?.awaiting, state.loading) { if (count > 0) listState.animateScrollToItem(count - 1) }
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
@@ -264,7 +289,13 @@ private fun ChatPane(state: ChatState, modifier: Modifier) {
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     items(state.messages) { MessageView(it) }
-                    if (state.loading) item { TypingRow() }
+                    when {
+                        taskActive -> {
+                            item { TaskStatusLine(state) }
+                            item { TaskInlineActions(state) }
+                        }
+                        state.loading -> item { TypingRow() }
+                    }
                 }
             }
         }
@@ -289,7 +320,7 @@ private fun EmptyState(state: ChatState) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("Какие документы нужны?", "Сроки оформления", "Риски отказа").forEach { hint ->
                 Surface(
-                    onClick = { state.input = hint; state.send() },
+                    onClick = { state.input = hint; state.submitComposer() },
                     color = MaterialTheme.colorScheme.surface,
                     shape = RoundedCornerShape(12.dp),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
@@ -315,9 +346,12 @@ private fun Composer(state: ChatState) {
                     value = state.input,
                     onValueChange = { state.input = it },
                     modifier = Modifier.fillMaxWidth().onPreviewKeyEvent { e ->
-                        if (e.key == Key.Enter && e.type == KeyEventType.KeyDown && !e.isShiftPressed) { state.send(); true } else false
+                        if (e.key == Key.Enter && e.type == KeyEventType.KeyDown && !e.isShiftPressed) { state.submitComposer(); true } else false
                     },
-                    placeholder = { Text("Спросите визового специалиста…", color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                    placeholder = {
+                        val hint = if (state.task?.awaiting == Awaiting.ANSWER) "Ответьте на уточняющие вопросы…" else "Спросите визового специалиста…"
+                        Text(hint, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    },
                     maxLines = 6,
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = Color.Transparent,
@@ -329,6 +363,7 @@ private fun Composer(state: ChatState) {
                     )
                 )
                 Row(Modifier.fillMaxWidth().padding(start = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AttachButton(state)
                     DropdownChip(state.model.title, Models.all, { it.title }) { state.chooseModel(it) }
                     Spacer(Modifier.weight(1f))
                     if (state.sessionTokens > 0) {
@@ -352,7 +387,7 @@ private fun Composer(state: ChatState) {
 private fun SendButton(state: ChatState) {
     val enabled = !state.loading && state.input.isNotBlank()
     Surface(
-        onClick = { state.send() },
+        onClick = { state.submitComposer() },
         enabled = enabled,
         shape = CircleShape,
         color = if (enabled) AppColors.accent else MaterialTheme.colorScheme.outlineVariant,

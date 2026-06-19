@@ -44,11 +44,14 @@ class AccountStore(private val root: FileStore) {
         val rest = current.accounts.filterNot { it.id == id }
         val active = if (current.activeId == id) rest.firstOrNull()?.id.orEmpty() else current.activeId
         write(current.copy(accounts = rest, activeId = active))
+        // Удаляем и данные аккаунта с диска (диалоги, память, профиль, документы) — без следов.
+        runCatching { File(accountsDir, id).deleteRecursively() }
     }
 
     fun conversations(accountId: String): ConversationRepository = FileConversationRepository(accountRoot(accountId))
     fun memory(accountId: String): MemoryStore = FileMemoryStore(accountRoot(accountId))
     fun profiles(accountId: String): ProfileStore = ProfileStore(accountRoot(accountId))
+    fun docs(accountId: String): DocStore = DocStore(accountRoot(accountId))
 
     private fun accountRoot(id: String) = FileStore(File(accountsDir, id))
 
