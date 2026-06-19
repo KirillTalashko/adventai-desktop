@@ -1,11 +1,16 @@
 package com.example.adventdesktop.data
 
+import com.example.adventdesktop.domain.Account
 import com.example.adventdesktop.domain.Conversation
 import com.example.adventdesktop.domain.ConversationMeta
 import com.example.adventdesktop.domain.Derived
+import com.example.adventdesktop.domain.FormatPref
 import com.example.adventdesktop.domain.Message
+import com.example.adventdesktop.domain.ResponseLength
 import com.example.adventdesktop.domain.Role
 import com.example.adventdesktop.domain.TokenUsage
+import com.example.adventdesktop.domain.Tone
+import com.example.adventdesktop.domain.UserProfile
 import com.example.adventdesktop.domain.WorkingMemory
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -88,3 +93,41 @@ internal fun ConversationMetaDto.toDomain() = ConversationMeta(id, title, update
 
 internal fun WorkingMemoryDto.toDomain() = WorkingMemory(goal, constraints)
 internal fun WorkingMemory.toDto() = WorkingMemoryDto(goal, constraints)
+
+// --- Профиль пользователя (Day 12) ---
+
+@Serializable
+internal data class ProfileDto(
+    val name: String = "",
+    val about: String = "",
+    val length: String = "Balanced",
+    val tone: String = "Friendly",
+    val formats: List<String> = emptyList(),
+    val constraints: String = "",
+    val language: String = "Русский"
+)
+
+internal fun ProfileDto.toDomain() = UserProfile(
+    name = name,
+    about = about,
+    length = ResponseLength.entries.firstOrNull { it.name == length } ?: ResponseLength.Balanced,
+    tone = Tone.entries.firstOrNull { it.name == tone } ?: Tone.Friendly,
+    formats = formats.mapNotNull { n -> FormatPref.entries.firstOrNull { it.name == n } }.toSet(),
+    constraints = constraints,
+    language = language
+)
+
+internal fun UserProfile.toDto() = ProfileDto(
+    name = name, about = about, length = length.name, tone = tone.name,
+    formats = formats.map { it.name }, constraints = constraints, language = language
+)
+
+// --- Аккаунты (Day 12) ---
+
+@Serializable
+internal data class AccountDto(val id: String, val name: String, val createdAt: Long = 0L)
+
+@Serializable
+internal data class AccountsFileDto(val accounts: List<AccountDto> = emptyList(), val activeId: String = "")
+
+internal fun AccountDto.toDomain() = Account(id, name)

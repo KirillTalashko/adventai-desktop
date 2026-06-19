@@ -9,9 +9,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import com.example.adventdesktop.data.AccountStore
 import com.example.adventdesktop.data.ConfigStore
-import com.example.adventdesktop.data.FileConversationRepository
-import com.example.adventdesktop.data.FileMemoryStore
 import com.example.adventdesktop.data.FileStore
 import com.example.adventdesktop.data.appHomeDir
 import com.example.adventdesktop.ui.App
@@ -36,8 +35,7 @@ private fun rememberAppState(): ChatState {
     val state = remember {
         val store = FileStore(appHomeDir())
         ChatState(
-            conversations = FileConversationRepository(store),
-            memory = FileMemoryStore(store),
+            accounts = AccountStore(store),
             configStore = ConfigStore(store),
             scope = scope
         )

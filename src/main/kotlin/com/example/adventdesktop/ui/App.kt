@@ -72,22 +72,39 @@ private val LogoFg = Color(0xFF8A8A85)
 fun App(state: ChatState) {
     var showSettings by remember { mutableStateOf(false) }
     var showMemory by remember { mutableStateOf(false) }
+    var showProfile by remember { mutableStateOf(false) }
 
     AdventTheme {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Row(Modifier.fillMaxSize()) {
-                Sidebar(state, Modifier.width(272.dp).fillMaxHeight(), { showSettings = true }, { showMemory = true })
-                VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                ChatPane(state, Modifier.weight(1f).fillMaxHeight())
+            if (state.needsOnboarding) {
+                Onboarding(state)
+            } else {
+                Row(Modifier.fillMaxSize()) {
+                    Sidebar(
+                        state, Modifier.width(272.dp).fillMaxHeight(),
+                        onSettings = { showSettings = true },
+                        onMemory = { showMemory = true },
+                        onProfile = { showProfile = true }
+                    )
+                    VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    ChatPane(state, Modifier.weight(1f).fillMaxHeight())
+                }
             }
         }
         if (showSettings) SettingsDialog(state) { showSettings = false }
         if (showMemory) MemoryDialog(state) { showMemory = false }
+        if (showProfile) ProfileDialog(state) { showProfile = false }
     }
 }
 
 @Composable
-private fun Sidebar(state: ChatState, modifier: Modifier, onSettings: () -> Unit, onMemory: () -> Unit) {
+private fun Sidebar(
+    state: ChatState,
+    modifier: Modifier,
+    onSettings: () -> Unit,
+    onMemory: () -> Unit,
+    onProfile: () -> Unit
+) {
     Column(
         modifier = modifier.background(AppColors.sidebar).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -99,6 +116,8 @@ private fun Sidebar(state: ChatState, modifier: Modifier, onSettings: () -> Unit
             ) { Text("В", color = LogoFg, fontWeight = FontWeight.Bold) }
             Text("Визовый специалист", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
         }
+
+        AccountSwitcher(state, onProfile)
 
         Surface(
             onClick = { state.newConversation() },
@@ -150,6 +169,53 @@ private fun Sidebar(state: ChatState, modifier: Modifier, onSettings: () -> Unit
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SidebarButton("Память", null, onMemory, Modifier.weight(1f))
             SidebarButton("Настройки", Icons.Filled.Settings, onSettings, Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun AccountSwitcher(state: ChatState, onProfile: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth()) {
+        Surface(
+            onClick = { open = true },
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(10.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(24.dp).background(AppColors.accent, CircleShape), contentAlignment = Alignment.Center) {
+                    Text(
+                        (state.activeAccount?.name?.trim()?.firstOrNull() ?: 'П').uppercaseChar().toString(),
+                        color = Color.White, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        state.activeAccount?.name ?: "Профиль",
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium
+                    )
+                    Text("аккаунт", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Icon(Icons.Filled.KeyboardArrowDown, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        DropdownMenu(open, { open = false }) {
+            state.accountList.forEach { acc ->
+                val isActive = acc.id == state.activeAccount?.id
+                DropdownMenuItem(
+                    text = { Text(acc.name + if (isActive) "  ✓" else "") },
+                    onClick = { state.switchAccount(acc.id); open = false }
+                )
+            }
+            HorizontalDivider()
+            DropdownMenuItem(text = { Text("Профиль…") }, onClick = { onProfile(); open = false })
+            DropdownMenuItem(text = { Text("Новый аккаунт") }, onClick = { state.startNewAccount(); open = false })
+            HorizontalDivider()
+            DropdownMenuItem(text = { Text("Выйти") }, onClick = { state.logout(); open = false })
         }
     }
 }

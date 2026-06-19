@@ -25,6 +25,7 @@ interface ConversationRepository {
 interface MemoryStore {
     fun loadLongTerm(): LongTermMemory
     fun appendProfile(line: String)
+    fun removeProfile(line: String)
     fun addDecision(decision: String)
     fun clearLongTerm()
 
