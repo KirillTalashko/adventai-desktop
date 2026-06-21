@@ -3,6 +3,7 @@ package com.example.adventdesktop.data
 import com.example.adventdesktop.domain.Account
 import com.example.adventdesktop.domain.Awaiting
 import com.example.adventdesktop.domain.Conversation
+import com.example.adventdesktop.domain.Invariant
 import com.example.adventdesktop.domain.ConversationMeta
 import com.example.adventdesktop.domain.Derived
 import com.example.adventdesktop.domain.FormatPref
@@ -159,6 +160,17 @@ internal fun UserProfile.toDto() = ProfileDto(
 )
 
 // --- Аккаунты (Day 12) ---
+
+@Serializable
+internal data class InvariantDto(
+    val id: String = "",
+    val text: String = "",
+    val builtIn: Boolean = false,
+    val active: Boolean = true
+)
+
+internal fun InvariantDto.toDomain() = Invariant(id, text, builtIn, active)
+internal fun Invariant.toDto() = InvariantDto(id, text, builtIn, active)
 
 @Serializable
 internal data class AccountDto(val id: String, val name: String, val createdAt: Long = 0L)

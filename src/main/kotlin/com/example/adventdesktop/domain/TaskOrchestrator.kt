@@ -15,15 +15,18 @@ data class TaskStep(val reply: AgentReply, val context: TaskContext, val cancel:
  */
 class TaskOrchestrator(
     private val gateway: LlmGateway,
+    private val guard: InvariantGuard? = null,
     private val basePrompt: String = VISA_SYSTEM_PROMPT,
     private val windowSize: Int = 12
 ) {
+    /** Активные инварианты аккаунта (День 14) — инжектятся во все стадийные запросы. Обновляет [ChatState]. */
+    var invariants: List<Invariant> = emptyList()
     /**
      * INTAKE: интервьюер. `[SIMPLE]` → это простой вопрос, ответ дан, задачу снимаем ([cancel]);
      * `[READY]` → PLANNING; иначе ждём ответ пользователя.
      */
     suspend fun intake(ctx: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatching {
-        val resp = call(INTERVIEWER, ctx, history, profile, "Оцени запрос: ответь сразу, уточни недостающее или подтверди готовность к плану.")
+        val resp = call(INTERVIEWER, ctx, history, profile, "Оцени запрос: ответь сразу, уточни недостающее или подтверди готовность к плану.", guarded = true)
         when {
             hasTag(resp.text, "SIMPLE") -> TaskStep(AgentReply(clean(resp.text), resp.usage), ctx, cancel = true)
             hasTag(resp.text, "READY") -> TaskStep(AgentReply(clean(resp.text), resp.usage), ctx.copy(awaiting = Awaiting.NONE, prompt = "").transitionTo(TaskState.PLANNING))
@@ -71,7 +74,7 @@ class TaskOrchestrator(
         val instruction = "Выполни ИМЕННО шаг ${ctx.step + 1} из ${ctx.total}: «${ctx.current}». " +
             "Не возвращайся к прошлым шагам и не забегай вперёд. Заверши строкой [STEP_RESULT] <что сделано по ЭТОМУ шагу>. " +
             "Если нужен документ пользователя — добавь [NEED_DOC] <короткий ярлык, 2–4 слова>."
-        val resp = call(EXECUTOR, ctx, history, profile, instruction, historyLimit = 6)
+        val resp = call(EXECUTOR, ctx, history, profile, instruction, historyLimit = 6, guarded = true)
         val needDoc = parseTagged(resp.text, "NEED_DOC")
         val result = parseTagged(resp.text, "STEP_RESULT") ?: "шаг ${ctx.step + 1} выполнен"
         // Документы НЕ блокируют: нужный файл уходит в «понадобится позже», шаг всегда продвигается (#3, #4).
@@ -112,7 +115,7 @@ class TaskOrchestrator(
 
     /** Ответ на вопрос/реплику пользователя в контексте задачи БЕЗ изменения состояния автомата (#2). */
     suspend fun assist(ctx: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatching {
-        val resp = call(ASSISTANT, ctx, history, profile, "Ответь на последнее сообщение пользователя по существу, опираясь на [STATE]. Не выполняй шаги и не меняй план.", historyLimit = 8)
+        val resp = call(ASSISTANT, ctx, history, profile, "Ответь на последнее сообщение пользователя по существу, опираясь на [STATE]. Не выполняй шаги и не меняй план.", historyLimit = 8, guarded = true)
         TaskStep(AgentReply(clean(resp.text), resp.usage), ctx)
     }
 
@@ -123,20 +126,41 @@ class TaskOrchestrator(
         history: List<Message>,
         profile: UserProfile?,
         instruction: String,
-        historyLimit: Int = windowSize
+        historyLimit: Int = windowSize,
+        guarded: Boolean = false
     ): GatewayResponse {
         val system = buildString {
             append(basePrompt).append("\n\n").append(rolePrompt)
             append("\n\n").append(ctx.renderStateBlock())
-            if (profile != null) append("\n\n[ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ — как отвечать]\n").append(profile.toPromptBlock())
+            val inv = renderInvariantsBlock(invariants)
+            if (inv.isNotEmpty()) append("\n\n").append(inv)
+            if (profile != null) {
+                append("\n\n[ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ — как отвечать]\n").append(profile.toPromptBlock())
+                append("\n\nПрофиль — вспомогательный фон, а НЕ текущая задача. Работай с тем, что задано в задаче/[STATE]; ")
+                append("если фон (упомянутая страна или планы) не совпадает с задачей — это НЕ противоречие, не переспрашивай об этом.")
+            }
         }
         val messages = buildList {
             add(Message(Role.System, system))
             addAll(history.takeLast(historyLimit))
             add(Message(Role.User, instruction))
         }
-        return gateway.complete(messages)
+        var resp = gateway.complete(messages)
+        // Двойная защита (День 14): на пользовательских стадиях страж проверяет ответ; при нарушении —
+        // одна перегенерация в обоснованный отказ. Инжект инвариантов выше — первый рубеж, страж — второй.
+        if (guarded && guard != null) {
+            val violation = guard.check(resp.text, invariants)
+            if (violation != null) {
+                resp = gateway.complete(messages + Message(Role.Assistant, resp.text) + Message(Role.User, guardFix(violation)))
+            }
+        }
+        return resp
     }
+
+    private fun guardFix(violation: String): String =
+        "СТОП: твой ответ нарушает инвариант — $violation. Перепиши: НЕ нарушай инвариант — корректно откажись, " +
+        "назови нарушаемый инвариант и кратко объясни причину; при возможности предложи допустимую законную " +
+        "альтернативу. Сохрани требуемый формат ответа (нужные управляющие теги, если они требовались)."
 
     // --- разбор сигналов и очистка текста ---
 

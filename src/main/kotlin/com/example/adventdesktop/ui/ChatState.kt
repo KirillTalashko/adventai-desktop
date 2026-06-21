@@ -7,6 +7,7 @@ import com.example.adventdesktop.data.AccountStore
 import com.example.adventdesktop.data.ConfigStore
 import com.example.adventdesktop.data.DesktopConfig
 import com.example.adventdesktop.data.DocStore
+import com.example.adventdesktop.data.InvariantStore
 import com.example.adventdesktop.data.LlmClient
 import com.example.adventdesktop.data.ModelOption
 import com.example.adventdesktop.data.Models
@@ -14,6 +15,9 @@ import com.example.adventdesktop.data.ProfileStore
 import com.example.adventdesktop.data.resolveLlmConfig
 import com.example.adventdesktop.domain.Account
 import com.example.adventdesktop.domain.Awaiting
+import com.example.adventdesktop.domain.BUILT_IN_INVARIANTS
+import com.example.adventdesktop.domain.Invariant
+import com.example.adventdesktop.domain.InvariantGuard
 import com.example.adventdesktop.domain.Conversation
 import com.example.adventdesktop.domain.ConversationMeta
 import com.example.adventdesktop.domain.ConversationRepository
@@ -75,6 +79,11 @@ class ChatState(
     private var memory: MemoryStore? = null
     private var profileStore: ProfileStore? = null
     private var docStore: DocStore? = null
+    private var invariantStore: InvariantStore? = null
+
+    /** Инварианты (День 14): встроенные жёсткие + пользовательские. Учитываются в каждом ответе. */
+    var invariants by mutableStateOf(BUILT_IN_INVARIANTS)
+        private set
 
     /** Момент старта текущей операции стадии (для таймера в статус-строке). */
     var opStartedAtMs by mutableStateOf(0L)
@@ -153,6 +162,9 @@ class ChatState(
         memory = null
         profileStore = null
         docStore = null
+        invariantStore = null
+        invariants = BUILT_IN_INVARIANTS
+        orchestrator?.invariants = invariants
         current = null
         conversationList = emptyList()
         profile = UserProfile()
@@ -197,6 +209,9 @@ class ChatState(
         memory = accounts.memory(account.id)
         profileStore = accounts.profiles(account.id)
         docStore = accounts.docs(account.id)
+        invariantStore = accounts.invariants(account.id)
+        invariants = BUILT_IN_INVARIANTS + (invariantStore?.load() ?: emptyList())
+        orchestrator?.invariants = invariants
         profile = profileStore?.load() ?: UserProfile(name = account.name)
         current = conversations?.latest() ?: conversations?.create(DEFAULT_TITLE)
         refreshList()
@@ -228,10 +243,11 @@ class ChatState(
 
         val fill = contextFill
         val userProfile = profile
+        val activeInvariants = invariants
         scope.launch {
             val working = memory?.loadWorking(updated.id) ?: WorkingMemory()
             val longTerm = memory?.loadLongTerm() ?: LongTermMemory()
-            activeAgent.ask(updated, working, longTerm, userProfile, fill)
+            activeAgent.ask(updated, working, longTerm, userProfile, activeInvariants, fill)
                 .onSuccess { turn ->
                     val withReply = updated
                         .withMessage(Message(Role.Assistant, turn.reply.text, usage = turn.reply.usage))
@@ -535,6 +551,28 @@ class ChatState(
     fun clearWorking() { current?.let { memory?.clearWorking(it.id) } }
     fun clearLongTerm() { memory?.clearLongTerm() }
 
+    // --- инварианты (День 14) ---
+
+    fun addInvariant(text: String) {
+        val clean = text.trim()
+        if (clean.isEmpty()) return
+        setUserInvariants(userInvariants() + Invariant("usr-${System.currentTimeMillis()}", clean))
+    }
+
+    fun removeInvariant(id: String) = setUserInvariants(userInvariants().filterNot { it.id == id })
+
+    fun toggleInvariant(id: String) =
+        setUserInvariants(userInvariants().map { if (it.id == id) it.copy(active = !it.active) else it })
+
+    private fun userInvariants(): List<Invariant> = invariants.filterNot { it.builtIn }
+
+    /** Пересобрать список (встроенные + пользовательские), сохранить на диск, обновить оркестратор. */
+    private fun setUserInvariants(user: List<Invariant>) {
+        invariants = BUILT_IN_INVARIANTS + user
+        invariantStore?.save(user)
+        orchestrator?.invariants = invariants
+    }
+
     fun dispose() {
         client?.close()
         extractorClient?.close()
@@ -543,13 +581,16 @@ class ChatState(
     private fun rebuildAgent() {
         client?.close()
         extractorClient?.close()
-        val llm = resolveLlmConfig(model, config)
-        client = llm?.let { LlmClient(it) }
-        agent = client?.let { VisaAgent(it) }
-        orchestrator = client?.let { TaskOrchestrator(it) }
+        // Служебный клиент (deepseek) — для извлечения памяти и стража инвариантов: дёшево и стабильно.
         val extractorLlm = resolveLlmConfig(Models.byId("deepseek-chat"), config)
         extractorClient = extractorLlm?.let { LlmClient(it) }
         memoryExtractor = extractorClient?.let { MemoryExtractor(it) }
+        val guard = extractorClient?.let { InvariantGuard(it) }
+
+        val llm = resolveLlmConfig(model, config)
+        client = llm?.let { LlmClient(it) }
+        agent = client?.let { VisaAgent(it, guard) }
+        orchestrator = client?.let { TaskOrchestrator(it, guard).apply { invariants = this@ChatState.invariants } }
     }
 
     private fun refreshList() {

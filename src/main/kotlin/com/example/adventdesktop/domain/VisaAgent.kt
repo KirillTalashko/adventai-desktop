@@ -23,6 +23,7 @@ data class AgentTurn(val reply: AgentReply, val derived: Derived)
  */
 class VisaAgent(
     private val gateway: LlmGateway,
+    private val guard: InvariantGuard? = null,
     systemPrompt: String = VISA_SYSTEM_PROMPT,
     windowSize: Int = 12
 ) {
@@ -33,10 +34,21 @@ class VisaAgent(
         working: WorkingMemory,
         longTerm: LongTermMemory,
         profile: UserProfile?,
+        invariants: List<Invariant>,
         contextFill: Float
     ): Result<AgentTurn> = runCatching {
-        val assembled = assembler.assemble(conversation, working, longTerm, profile, contextFill)
-        val response = gateway.complete(assembled.messages)
+        val assembled = assembler.assemble(conversation, working, longTerm, profile, invariants, contextFill)
+        var response = gateway.complete(assembled.messages)
+        // Двойная защита (День 14): пост-проверка стража; при нарушении — перегенерация в обоснованный отказ.
+        val violation = guard?.check(response.text, invariants)
+        if (violation != null) {
+            val fix = assembled.messages +
+                Message(Role.Assistant, response.text) +
+                Message(Role.User, "СТОП: твой предыдущий ответ нарушает инвариант — $violation. Перепиши ответ так, " +
+                    "чтобы НЕ нарушать инвариант: корректно откажись, назови нарушаемый инвариант и кратко объясни " +
+                    "причину; при возможности предложи допустимую законную альтернативу.")
+            response = gateway.complete(fix)
+        }
         AgentTurn(AgentReply(response.text, response.usage), assembled.derived)
     }
 }

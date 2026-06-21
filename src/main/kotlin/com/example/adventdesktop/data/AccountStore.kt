@@ -52,6 +52,7 @@ class AccountStore(private val root: FileStore) {
     fun memory(accountId: String): MemoryStore = FileMemoryStore(accountRoot(accountId))
     fun profiles(accountId: String): ProfileStore = ProfileStore(accountRoot(accountId))
     fun docs(accountId: String): DocStore = DocStore(accountRoot(accountId))
+    fun invariants(accountId: String): InvariantStore = InvariantStore(accountRoot(accountId))
 
     private fun accountRoot(id: String) = FileStore(File(accountsDir, id))
 
