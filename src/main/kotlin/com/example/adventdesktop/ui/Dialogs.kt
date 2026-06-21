@@ -45,6 +45,7 @@ import androidx.compose.ui.window.DialogWindow
 import androidx.compose.ui.window.rememberDialogState
 import com.example.adventdesktop.data.ModelOption
 import com.example.adventdesktop.data.Models
+import com.example.adventdesktop.domain.Invariant
 
 // ============================== Настройки ==============================
 
@@ -228,6 +229,67 @@ fun MemoryDialog(state: ChatState, onClose: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+// ============================== Инварианты (отдельное окно) ==============================
+
+@Composable
+fun InvariantsDialog(state: ChatState, onClose: () -> Unit) {
+    DialogWindow(
+        onCloseRequest = onClose,
+        state = rememberDialogState(size = DpSize(700.dp, 640.dp)),
+        title = "Инварианты"
+    ) {
+        AdventTheme {
+            Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                val all = state.invariants
+                val builtIns = all.filter { it.builtIn }
+                val userInv = all.filterNot { it.builtIn }
+
+                Column(
+                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text("Инварианты", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Правила, которые ассистент не имеет права нарушать. Хранятся отдельно от диалога, учитываются в каждом ответе; при конфликте ассистент отказывается и объясняет причину.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    MemoryCard("Встроенные правила", "жёсткие · всегда активны") {
+                        builtIns.forEach { Bullet(it.text) }
+                    }
+
+                    MemoryCard("Ваши инварианты", "бизнес-правила, ограничения по бюджету/стеку, договорённости") {
+                        if (userInv.isEmpty()) EmptyHint() else userInv.forEach { inv ->
+                            InvariantRow(inv, onToggle = { state.toggleInvariant(inv.id) }, onRemove = { state.removeInvariant(inv.id) })
+                        }
+                        AddRow("Добавить инвариант…", "Добавить") { state.addInvariant(it) }
+                    }
+
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Spacer(Modifier.weight(1f))
+                        Button(onClick = onClose, shape = RoundedCornerShape(10.dp)) { Text("Готово") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InvariantRow(inv: Invariant, onToggle: () -> Unit, onRemove: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            inv.text,
+            Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (inv.active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        TextButton(onClick = onToggle) { Text(if (inv.active) "Вкл" else "Выкл") }
+        TextButton(onClick = onRemove) { Text("Удалить", color = MaterialTheme.colorScheme.error) }
     }
 }
 

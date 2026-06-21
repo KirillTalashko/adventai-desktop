@@ -27,6 +27,7 @@ class ContextAssembler(
         working: WorkingMemory,
         longTerm: LongTermMemory,
         profile: UserProfile?,
+        invariants: List<Invariant>,
         contextFill: Float
     ): Assembled {
         val history = conversation.messages
@@ -34,7 +35,7 @@ class ContextAssembler(
 
         // Окно ещё свободно — отправляем всю историю как есть (ничего не теряем).
         if (contextFill < SUMMARY_FILL || history.size <= windowSize) {
-            return Assembled(listOf(system(systemBlock(working, longTerm, "", profile))) + history, derived, 0)
+            return Assembled(listOf(system(systemBlock(working, longTerm, "", profile, invariants))) + history, derived, 0)
         }
 
         // Заполнение высокое: свернуть старый хвост (за пределами последних N) в резюме.
@@ -43,24 +44,31 @@ class ContextAssembler(
             val text = runCatching { summarize(history.take(oldCount)) }.getOrNull()?.trim()
             if (!text.isNullOrEmpty()) derived = derived.copy(summary = text, summarizedCount = oldCount)
         }
-        val sys = systemBlock(working, longTerm, derived.summary, profile)
+        val sys = systemBlock(working, longTerm, derived.summary, profile, invariants)
         return Assembled(listOf(system(sys)) + history.takeLast(windowSize), derived, oldCount)
     }
 
-    private fun systemBlock(working: WorkingMemory, longTerm: LongTermMemory, summary: String, profile: UserProfile?): String = buildString {
+    private fun systemBlock(working: WorkingMemory, longTerm: LongTermMemory, summary: String, profile: UserProfile?, invariants: List<Invariant>): String = buildString {
         append(systemPrompt)
+        val inv = renderInvariantsBlock(invariants)
+        if (inv.isNotEmpty()) append("\n\n").append(inv)
         if (profile != null) {
             append("\n\n[ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ — как отвечать]\n").append(profile.toPromptBlock())
         }
         if (!longTerm.isEmpty) {
-            append("\n\n[ДОЛГОВРЕМЕННАЯ ПАМЯТЬ — профиль и решения; считай это фактами о пользователе]\n")
+            append("\n\n[ДОЛГОВРЕМЕННАЯ ПАМЯТЬ — что известно о пользователе из прошлых реплик; может устареть]\n")
             if (longTerm.profile.isNotBlank()) append(longTerm.profile.trim()).append('\n')
             longTerm.decisions.forEach { append("- решение: ").append(it).append('\n') }
         }
         if (!working.isEmpty) {
-            append("\n\n[РАБОЧАЯ ПАМЯТЬ — текущая задача]\n")
+            append("\n\n[РАБОЧАЯ ПАМЯТЬ — предполагаемая цель/ограничения текущей задачи]\n")
             if (working.goal.isNotBlank()) append("Цель: ").append(working.goal).append('\n')
             working.constraints.forEach { append("Ограничение: ").append(it).append('\n') }
+        }
+        if (profile != null || !longTerm.isEmpty || !working.isEmpty) {
+            append("\n\nПрофиль и память — вспомогательный фон, а НЕ текущий запрос и не ограничение. Отвечай на ")
+            append("ТЕКУЩИЙ вопрос пользователя; если фон (например, упомянутая страна или планы) не совпадает с ")
+            append("вопросом — это НЕ противоречие, просто ответь на заданный вопрос.")
         }
         if (summary.isNotBlank()) {
             append("\n\n[РЕЗЮМЕ РАННЕЙ ЧАСТИ ДИАЛОГА]\n").append(summary)

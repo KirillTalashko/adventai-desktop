@@ -76,6 +76,7 @@ fun App(state: ChatState) {
     var showSettings by remember { mutableStateOf(false) }
     var showMemory by remember { mutableStateOf(false) }
     var showProfile by remember { mutableStateOf(false) }
+    var showInvariants by remember { mutableStateOf(false) }
 
     AdventTheme {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -87,7 +88,8 @@ fun App(state: ChatState) {
                         state, Modifier.width(272.dp).fillMaxHeight(),
                         onSettings = { showSettings = true },
                         onMemory = { showMemory = true },
-                        onProfile = { showProfile = true }
+                        onProfile = { showProfile = true },
+                        onInvariants = { showInvariants = true }
                     )
                     VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     ChatPane(state, Modifier.weight(1f).fillMaxHeight())
@@ -97,6 +99,7 @@ fun App(state: ChatState) {
         if (showSettings) SettingsDialog(state) { showSettings = false }
         if (showMemory) MemoryDialog(state) { showMemory = false }
         if (showProfile) ProfileDialog(state) { showProfile = false }
+        if (showInvariants) InvariantsDialog(state) { showInvariants = false }
     }
 }
 
@@ -106,7 +109,8 @@ private fun Sidebar(
     modifier: Modifier,
     onSettings: () -> Unit,
     onMemory: () -> Unit,
-    onProfile: () -> Unit
+    onProfile: () -> Unit,
+    onInvariants: () -> Unit
 ) {
     Column(
         modifier = modifier.background(AppColors.sidebar).padding(12.dp),
@@ -169,6 +173,7 @@ private fun Sidebar(
         }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        SidebarButton("Инварианты", null, onInvariants, Modifier.fillMaxWidth())
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SidebarButton("Память", null, onMemory, Modifier.weight(1f))
             SidebarButton("Настройки", Icons.Filled.Settings, onSettings, Modifier.weight(1f))

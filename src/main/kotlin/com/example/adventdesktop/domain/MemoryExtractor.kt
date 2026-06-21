@@ -56,12 +56,12 @@ class MemoryExtractor(private val gateway: LlmGateway) {
             // «ЦЕЛЬ: …» на одной строке
             if (trimmed.uppercase().startsWith("ЦЕЛЬ:")) {
                 val v = trimmed.substringAfter(':').trim()
-                if (v.isNotEmpty() && v != "—") goal = v
+                if (!isNonFact(v)) goal = v
                 section = Section.GOAL
                 return@forEach
             }
             val item = trimmed.removePrefix("-").removePrefix("•").trim()
-            if (item.isEmpty() || item == "—" || item.equals("НЕТ", ignoreCase = true)) return@forEach
+            if (isNonFact(item)) return@forEach
             when (section) {
                 Section.GOAL -> if (goal == null) goal = item
                 Section.CONSTRAINTS -> constraints += item
@@ -73,6 +73,14 @@ class MemoryExtractor(private val gateway: LlmGateway) {
         return MemoryUpdate(goal = goal, constraints = constraints, profile = profile, decisions = decisions)
     }
 
+    /** Отсев «не-фактов»: пустышки, плейсхолдеры `<…>` и маркеры догадок/инференса (баги памяти). */
+    private fun isNonFact(s: String): Boolean {
+        val t = s.trim().lowercase()
+        if (t.isEmpty() || t == "—" || t == "-" || t == "нет") return true
+        if (t.startsWith("<")) return true
+        return NON_FACT_MARKERS.any { t.contains(it) }
+    }
+
     private fun label(role: Role) = when (role) {
         Role.User -> "Пользователь"
         Role.Assistant -> "Агент"
@@ -82,20 +90,34 @@ class MemoryExtractor(private val gateway: LlmGateway) {
     private enum class Section { NONE, GOAL, CONSTRAINTS, PROFILE, DECISIONS }
 
     private companion object {
+        /** Маркеры догадок/инференса/плейсхолдеров — такие «факты» в память не пишем. */
+        val NON_FACT_MARKERS = listOf(
+            "нет новой информации", "не опроверг", "уточнено в вопросе", "по умолчанию",
+            "предположительно", "возможно,", "наверное", "если пользователь"
+        )
+
         val SYSTEM_PROMPT = """
             Ты — модуль памяти ассистента «визовый специалист». На вход дают текущую память и последние
-            сообщения диалога. Извлеки ТОЛЬКО НОВЫЕ факты, которых ещё НЕТ в текущей памяти. Не выдумывай —
-            бери строго из сообщений. Верни строго в таком формате (пустые секции пропускай, без пояснений):
+            сообщения диалога (роли «Пользователь» и «Агент»). Извлеки ТОЛЬКО НОВЫЕ факты, которых ещё НЕТ
+            в текущей памяти.
 
-            ЦЕЛЬ: <одна строка — цель поездки/задачи, если прояснилась или изменилась>
+            СТРОГИЕ ПРАВИЛА:
+            - Бери факты ТОЛЬКО из реплик ПОЛЬЗОВАТЕЛЯ. Реплики «Агент» — лишь контекст; из них факты НЕ извлекай.
+            - НЕ выдумывай и НЕ домысливай. Если пользователь прямо не сказал — не записывай. Никаких
+              «по умолчанию», «предположительно», «не опроверг», догадок о цели или стране.
+            - ЦЕЛЬ указывай ТОЛЬКО если пользователь явно назвал цель/задачу своими словами.
+
+            Верни строго в таком формате (пустые секции пропускай, без пояснений):
+
+            ЦЕЛЬ: <одна строка — цель, если пользователь её ЯВНО назвал>
             ОГРАНИЧЕНИЯ:
-            - <сроки, бюджет, требования, числа и даты дословно>
+            - <сроки, бюджет, требования, числа и даты — дословно из слов пользователя>
             ПРОФИЛЬ:
-            - <устойчивый факт о пользователе: гражданство, семья, история поездок, предпочтения>
+            - <устойчивый факт о пользователе из его слов: гражданство, семья, история поездок, предпочтения>
             РЕШЕНИЯ:
             - <принятое решение или договорённость>
 
-            Если новых фактов нет — ответь одним словом: НЕТ.
+            Если новых фактов из слов пользователя нет — ответь одним словом: НЕТ.
         """.trimIndent()
     }
 }
