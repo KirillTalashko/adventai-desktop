@@ -62,6 +62,8 @@ internal data class TaskContextDto(
     val pending: List<String> = emptyList(),
     val note: String = "",
     val revises: Int = 0,
+    val offer: String = "",
+    val interviewOffered: Boolean = false,
     val paused: Boolean = false
 )
 
@@ -111,13 +113,14 @@ internal fun TaskContextDto.toDomain() = TaskContext(
     state = TaskState.entries.firstOrNull { it.name == state } ?: TaskState.INTAKE,
     awaiting = Awaiting.entries.firstOrNull { it.name == awaiting } ?: Awaiting.NONE,
     prompt = prompt, options = options, approach = approach,
-    plan = plan, step = step, done = done, docs = docs, pending = pending, note = note, revises = revises, paused = paused
+    plan = plan, step = step, done = done, docs = docs, pending = pending, note = note, revises = revises,
+    offer = offer, interviewOffered = interviewOffered, paused = paused
 )
 
 internal fun TaskContext.toDto() = TaskContextDto(
     task = task, state = state.name, awaiting = awaiting.name, prompt = prompt, options = options,
     approach = approach, plan = plan, step = step, done = done, docs = docs, pending = pending, note = note,
-    revises = revises, paused = paused
+    revises = revises, offer = offer, interviewOffered = interviewOffered, paused = paused
 )
 
 internal fun ConversationDto.toDomain(): Conversation =

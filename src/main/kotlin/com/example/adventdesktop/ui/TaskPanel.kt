@@ -1,6 +1,13 @@
 package com.example.adventdesktop.ui
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,7 +19,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -25,9 +31,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlin.math.abs
+import kotlin.math.cos
 import com.example.adventdesktop.domain.Awaiting
 import com.example.adventdesktop.domain.TaskContext
 import com.example.adventdesktop.domain.TaskState
@@ -62,11 +74,7 @@ fun TaskStatusLine(state: ChatState) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        if (state.loading) {
-            CircularProgressIndicator(Modifier.size(11.dp), strokeWidth = 2.dp, color = AppColors.accent)
-        } else {
-            Text("✳", color = AppColors.accent, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-        }
+        PassportEmblem(loading = state.loading, modifier = Modifier.size(16.dp))
         Text(verb, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (seconds > 0) Text("· ${fmtElapsed(seconds)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (state.lastPromptTokens > 0) Text("· ${state.lastPromptTokens} ток.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -128,6 +136,10 @@ private fun ContinueInline(state: ChatState, ctx: TaskContext) {
         else -> "Продолжить"
     }
     Column(Modifier.padding(start = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        // Предложение доп-активности от агента-разведчика (можно отказаться).
+        if (ctx.offer.isNotBlank()) {
+            OfferCard(ctx.offer, onAccept = { state.startInterview() }, onDecline = { state.declineOffer() })
+        }
         // Информируем о следующем шаге плана.
         if (ctx.state == TaskState.EXECUTION && ctx.current.isNotBlank()) {
             Text(
@@ -147,6 +159,24 @@ private fun ContinueInline(state: ChatState, ctx: TaskContext) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SmallPrimary(label, enabled = state.hasKey) { state.advanceTask() }
             SmallGhost("Сброс") { state.resetTask() }
+        }
+    }
+}
+
+@Composable
+private fun OfferCard(text: String, onAccept: () -> Unit, onDecline: () -> Unit) {
+    Surface(
+        color = AppColors.accent.copy(alpha = 0.10f),
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, AppColors.accent.copy(alpha = 0.4f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("💬 $text", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SmallPrimary("Пройти") { onAccept() }
+                SmallGhost("Не сейчас") { onDecline() }
+            }
         }
     }
 }
@@ -242,6 +272,54 @@ private fun SmallGhost(label: String, onClick: () -> Unit) {
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+/** Эмблема-паспорт: закрытый в покое, «листается» (переворот страницы у корешка) во время загрузки. */
+@Composable
+private fun PassportEmblem(loading: Boolean, modifier: Modifier = Modifier) {
+    val cover = AppColors.accent
+    val pageLight = Color(0xFFE8ECF5)
+    val angle by rememberInfiniteTransition(label = "passport").animateFloat(
+        initialValue = 0f,
+        targetValue = Math.PI.toFloat(),
+        animationSpec = infiniteRepeatable(animation = tween(700, easing = LinearEasing), repeatMode = RepeatMode.Restart),
+        label = "flip"
+    )
+    Canvas(modifier) {
+        val w = size.width
+        val h = size.height
+        if (!loading) {
+            // Закрытый паспорт: обложка + эмблема-крест + строки.
+            val pw = w * 0.74f
+            val left = (w - pw) / 2f
+            val rad = w * 0.14f
+            drawRoundRect(cover, topLeft = Offset(left, 0f), size = Size(pw, h), cornerRadius = CornerRadius(rad, rad))
+            val cx = w / 2f
+            val cy = h * 0.40f
+            drawCircle(Color.White, radius = w * 0.13f, center = Offset(cx, cy), style = Stroke(width = w * 0.045f))
+            drawCircle(Color.White, radius = w * 0.03f, center = Offset(cx, cy))
+            drawLine(Color.White.copy(alpha = 0.85f), Offset(left + pw * 0.24f, h * 0.70f), Offset(left + pw * 0.76f, h * 0.70f), strokeWidth = w * 0.035f)
+            drawLine(Color.White.copy(alpha = 0.6f), Offset(left + pw * 0.30f, h * 0.82f), Offset(left + pw * 0.70f, h * 0.82f), strokeWidth = w * 0.035f)
+        } else {
+            // Открытый паспорт: две страницы + переворачивающаяся страница у корешка.
+            val top = h * 0.14f
+            val bookH = h * 0.72f
+            val r = w * 0.08f
+            drawRoundRect(cover, topLeft = Offset(0f, top - h * 0.07f), size = Size(w, bookH + h * 0.14f), cornerRadius = CornerRadius(r, r))
+            val spine = w / 2f
+            val half = w * 0.43f
+            drawRect(pageLight, topLeft = Offset(spine - half, top), size = Size(half, bookH))
+            drawRect(pageLight, topLeft = Offset(spine, top), size = Size(half, bookH))
+            // переворачивающаяся страница: ширина = half·|cos|, по знаку cos уходит вправо→к корешку→влево.
+            val c = cos(angle)
+            val pageW = half * abs(c)
+            val pageLeft = if (c >= 0f) spine else spine - pageW
+            drawRect(Color.White, topLeft = Offset(pageLeft, top), size = Size(pageW, bookH))
+            val edge = if (c >= 0f) spine + pageW else spine - pageW
+            drawLine(cover.copy(alpha = 0.5f), Offset(edge, top), Offset(edge, top + bookH), strokeWidth = w * 0.03f)
+            drawLine(cover, Offset(spine, top), Offset(spine, top + bookH), strokeWidth = w * 0.05f)
+        }
     }
 }
 
