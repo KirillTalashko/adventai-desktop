@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
@@ -31,6 +32,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,6 +48,7 @@ import androidx.compose.ui.window.rememberDialogState
 import com.example.adventdesktop.data.ModelOption
 import com.example.adventdesktop.data.Models
 import com.example.adventdesktop.domain.Invariant
+import com.example.adventdesktop.domain.Role
 
 // ============================== Настройки ==============================
 
@@ -290,6 +293,74 @@ private fun InvariantRow(inv: Invariant, onToggle: () -> Unit, onRemove: () -> U
         )
         TextButton(onClick = onToggle) { Text(if (inv.active) "Вкл" else "Выкл") }
         TextButton(onClick = onRemove) { Text("Удалить", color = MaterialTheme.colorScheme.error) }
+    }
+}
+
+// ============================== Пробное собеседование (отдельное окно) ==============================
+
+@Composable
+fun InterviewDialog(state: ChatState) {
+    DialogWindow(
+        onCloseRequest = { state.closeInterview() },
+        state = rememberDialogState(size = DpSize(640.dp, 680.dp)),
+        title = "Пробное собеседование"
+    ) {
+        AdventTheme {
+            Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                val scroll = rememberScrollState()
+                LaunchedEffect(state.interviewMessages.size, state.interviewLoading) { scroll.animateScrollTo(scroll.maxValue) }
+                Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Пробное собеседование", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Тренировка с «визовым офицером». Основная задача не двигается — после окончания вернётесь на свой шаг.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        state.interviewMessages.forEach { m ->
+                            val mine = m.role == Role.User
+                            Text(
+                                if (mine) "Вы" else "Визовый офицер",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (mine) MaterialTheme.colorScheme.onSurfaceVariant else AppColors.accent
+                            )
+                            Text(m.text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                        }
+                        if (state.interviewLoading) {
+                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                        }
+                    }
+                    if (!state.interviewFinished) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = state.interviewInput,
+                                onValueChange = { state.interviewInput = it },
+                                modifier = Modifier.weight(1f),
+                                placeholder = { Text("Ваш ответ офицеру…") },
+                                maxLines = 4,
+                                shape = RoundedCornerShape(10.dp)
+                            )
+                            FilledTonalButton(
+                                onClick = { state.interviewSubmit() },
+                                enabled = !state.interviewLoading && state.interviewInput.isNotBlank(),
+                                shape = RoundedCornerShape(10.dp)
+                            ) { Text("Ответить") }
+                        }
+                    }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (!state.interviewFinished) {
+                            TextButton(
+                                onClick = { state.finishInterview() },
+                                enabled = !state.interviewLoading && state.interviewMessages.isNotEmpty()
+                            ) { Text("Завершить и оценить") }
+                        }
+                        Spacer(Modifier.weight(1f))
+                        Button(onClick = { state.closeInterview() }, shape = RoundedCornerShape(10.dp)) { Text("Вернуться к задаче") }
+                    }
+                }
+            }
+        }
     }
 }
 

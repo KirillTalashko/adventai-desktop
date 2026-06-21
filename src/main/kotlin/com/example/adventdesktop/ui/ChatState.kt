@@ -25,6 +25,8 @@ import com.example.adventdesktop.domain.LongTermMemory
 import com.example.adventdesktop.domain.MemoryExtractor
 import com.example.adventdesktop.domain.MemoryStore
 import com.example.adventdesktop.domain.Message
+import com.example.adventdesktop.domain.MockInterviewAgent
+import com.example.adventdesktop.domain.OfferAgent
 import com.example.adventdesktop.domain.Role
 import com.example.adventdesktop.domain.TaskContext
 import com.example.adventdesktop.domain.TaskOrchestrator
@@ -64,6 +66,19 @@ class ChatState(
     private var orchestrator: TaskOrchestrator? = null
     private var extractorClient: LlmClient? = null
     private var memoryExtractor: MemoryExtractor? = null
+    private var offerAgent: OfferAgent? = null
+    private var interviewAgent: MockInterviewAgent? = null
+
+    // --- пробное собеседование (side-сессия; НЕ меняет состояние задачи) ---
+    var interviewOpen by mutableStateOf(false)
+        private set
+    var interviewMessages by mutableStateOf<List<Message>>(emptyList())
+        private set
+    var interviewLoading by mutableStateOf(false)
+        private set
+    var interviewFinished by mutableStateOf(false)
+        private set
+    var interviewInput by mutableStateOf("")
 
     // --- аккаунт / профиль ---
     var accountList by mutableStateOf<List<Account>>(emptyList())
@@ -402,6 +417,109 @@ class ChatState(
         conversations?.save(updated)
     }
 
+    // --- агент-разведчик: предложение доп-активности (пробное собеседование) ---
+
+    /** После выполненного шага ищет, не предложить ли пробное собеседование (один раз за задачу). */
+    private suspend fun maybeOfferInterview(conv: Conversation) {
+        val agent = offerAgent ?: return
+        val ctx = conv.task ?: return
+        if (ctx.interviewOffered || ctx.offer.isNotBlank()) return
+        if (ctx.state != TaskState.EXECUTION && ctx.state != TaskState.VALIDATION) return
+        val justDone = ctx.plan.getOrNull(ctx.step - 1).orEmpty()
+        val offer = runCatching { agent.check(ctx.task, justDone) }.getOrNull() ?: return
+        val cur = current ?: return
+        if (cur.id != conv.id) return
+        val curCtx = cur.task ?: return
+        if (curCtx.interviewOffered || curCtx.offer.isNotBlank()) return
+        val updated = cur.copy(task = curCtx.copy(offer = offer.title, interviewOffered = true))
+        current = updated
+        conversations?.save(updated)
+    }
+
+    /** Отказ от предложения: убрать плашку (повторно не предлагаем). */
+    fun declineOffer() {
+        val conv = current ?: return
+        val ctx = conv.task ?: return
+        if (ctx.offer.isBlank()) return
+        val updated = conv.copy(task = ctx.copy(offer = ""))
+        current = updated
+        conversations?.save(updated)
+    }
+
+    /** Принять предложение: открыть окно пробного собеседования (side-сессия, задача не двигается). */
+    fun startInterview() {
+        val conv = current ?: return
+        val ctx = conv.task ?: return
+        val ia = interviewAgent ?: run { error = noKeyError(); return }
+        if (interviewOpen || interviewLoading) return
+        current = conv.copy(task = ctx.copy(offer = ""))   // плашку убрать, согласие принято
+        current?.let { conversations?.save(it) }
+        interviewMessages = emptyList()
+        interviewFinished = false
+        interviewInput = ""
+        interviewOpen = true
+        interviewLoading = true
+        val taskText = ctx.task
+        scope.launch {
+            runCatching { ia.turn(taskText, emptyList()) }
+                .onSuccess { interviewMessages = listOf(Message(Role.Assistant, it.text, usage = it.usage)) }
+                .onFailure { error = it.message ?: "Ошибка собеседования" }
+            interviewLoading = false
+        }
+    }
+
+    /** Ответ пользователя на вопрос офицера → следующий вопрос. */
+    fun interviewSubmit() {
+        val text = interviewInput.trim()
+        val ia = interviewAgent ?: return
+        val taskText = current?.task?.task.orEmpty()
+        if (text.isEmpty() || interviewLoading || interviewFinished) return
+        interviewInput = ""
+        interviewMessages = interviewMessages + Message(Role.User, text)
+        val history = interviewMessages
+        interviewLoading = true
+        scope.launch {
+            runCatching { ia.turn(taskText, history) }
+                .onSuccess { interviewMessages = interviewMessages + Message(Role.Assistant, it.text, usage = it.usage) }
+                .onFailure { error = it.message ?: "Ошибка собеседования" }
+            interviewLoading = false
+        }
+    }
+
+    /** Завершить собеседование и получить оценку готовности. */
+    fun finishInterview() {
+        val ia = interviewAgent ?: return
+        val taskText = current?.task?.task.orEmpty()
+        if (interviewLoading || interviewFinished || interviewMessages.isEmpty()) return
+        val history = interviewMessages
+        interviewLoading = true
+        scope.launch {
+            runCatching { ia.evaluate(taskText, history) }
+                .onSuccess {
+                    interviewMessages = interviewMessages + Message(Role.Assistant, it.text, usage = it.usage)
+                    interviewFinished = true
+                }
+                .onFailure { error = it.message ?: "Ошибка оценки" }
+            interviewLoading = false
+        }
+    }
+
+    /** Закрыть окно: вернуться к задаче (она осталась на своём шаге). Итог запоминаем в диалоге. */
+    fun closeInterview() {
+        val conv = current
+        if (conv?.task != null && interviewFinished) {
+            val verdict = interviewMessages.lastOrNull { it.role == Role.Assistant }?.text.orEmpty()
+            val updated = conv.withMessage(Message(Role.Assistant, "📋 Пройдено пробное собеседование (вне плана).\n\n$verdict"))
+            current = updated
+            conversations?.save(updated)
+            refreshList()
+        }
+        interviewOpen = false
+        interviewMessages = emptyList()
+        interviewFinished = false
+        interviewInput = ""
+    }
+
     /**
      * Единая точка ввода (кнопки запуска нет — задача часть агента). Нет задачи → старт; уточнение →
      * ответ; выбор → свой вариант; завершено → новая задача; иначе — реплика и ход стадии.
@@ -473,6 +591,7 @@ class ChatState(
                 chain++
             }
             scope.launch { runExtraction(conv) }
+            scope.launch { maybeOfferInterview(conv) }
             lastOpSeconds = ((System.currentTimeMillis() - opStartedAtMs) / 1000).coerceAtLeast(0)
             loading = false
         }
@@ -586,11 +705,13 @@ class ChatState(
         extractorClient = extractorLlm?.let { LlmClient(it) }
         memoryExtractor = extractorClient?.let { MemoryExtractor(it) }
         val guard = extractorClient?.let { InvariantGuard(it) }
+        offerAgent = extractorClient?.let { OfferAgent(it) }
 
         val llm = resolveLlmConfig(model, config)
         client = llm?.let { LlmClient(it) }
         agent = client?.let { VisaAgent(it, guard) }
         orchestrator = client?.let { TaskOrchestrator(it, guard).apply { invariants = this@ChatState.invariants } }
+        interviewAgent = client?.let { MockInterviewAgent(it) }
     }
 
     private fun refreshList() {

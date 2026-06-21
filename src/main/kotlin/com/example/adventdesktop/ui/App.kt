@@ -59,7 +59,16 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
+import java.awt.Desktop
+import java.net.URI
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.adventdesktop.data.Models
@@ -100,6 +109,7 @@ fun App(state: ChatState) {
         if (showMemory) MemoryDialog(state) { showMemory = false }
         if (showProfile) ProfileDialog(state) { showProfile = false }
         if (showInvariants) InvariantsDialog(state) { showInvariants = false }
+        if (state.interviewOpen) InterviewDialog(state)
     }
 }
 
@@ -443,7 +453,7 @@ private fun MessageView(message: Message) {
             Text("Визовый специалист", style = MaterialTheme.typography.labelMedium, color = AppColors.accent, fontWeight = FontWeight.SemiBold)
             parseSegments(message.text).forEach { seg ->
                 when (seg) {
-                    is Segment.Plain -> Text(seg.text, color = MaterialTheme.colorScheme.onSurface)
+                    is Segment.Plain -> Text(linkify(seg.text, AppColors.accent), color = MaterialTheme.colorScheme.onSurface)
                     is Segment.Checklist -> ChecklistView(seg.items)
                 }
             }
@@ -498,6 +508,28 @@ private fun statusColor(status: String): Color {
 }
 
 // --- Парсинг блока [checklist] ---
+
+private val URL_REGEX = Regex("https?://[^\\s)\\]]+")
+
+/** Превращает голые URL в тексте в кликабельные ссылки (по клику открывается системный браузер). */
+private fun linkify(text: String, accent: Color): AnnotatedString = buildAnnotatedString {
+    var last = 0
+    for (m in URL_REGEX.findAll(text)) {
+        append(text.substring(last, m.range.first))
+        val raw = m.value
+        val url = raw.trimEnd('.', ',', ';', ')', '»', '"', '!', '?')   // не цеплять хвостовую пунктуацию
+        val styles = TextLinkStyles(SpanStyle(color = accent, textDecoration = TextDecoration.Underline))
+        withLink(LinkAnnotation.Url(url, styles) { link ->
+            runCatching {
+                val u = (link as? LinkAnnotation.Url)?.url ?: return@runCatching
+                if (Desktop.isDesktopSupported()) Desktop.getDesktop().browse(URI(u))
+            }
+        }) { append(url) }
+        if (raw.length > url.length) append(raw.substring(url.length))
+        last = m.range.last + 1
+    }
+    if (last < text.length) append(text.substring(last))
+}
 
 internal sealed interface Segment {
     data class Plain(val text: String) : Segment

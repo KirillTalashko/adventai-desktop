@@ -32,6 +32,8 @@ data class TaskContext(
     val pending: List<String> = emptyList(),  // документы, отложенные «приложу позже» (надо дозагрузить)
     val note: String = "",                    // замечание валидатора при возврате на доработку
     val revises: Int = 0,                     // сколько раз валидатор уже отправлял на доработку (лимит петли)
+    val offer: String = "",                   // активное предложение доп-активности (агент-разведчик); пусто = нет
+    val interviewOffered: Boolean = false,    // пробное собеседование уже предлагали (не повторять)
     val paused: Boolean = false
 ) {
     val total: Int get() = plan.size
@@ -88,6 +90,11 @@ data class TaskContext(
         if (note.isNotBlank()) append("Замечания валидатора: ").append(note).append('\n')
         if (awaiting != Awaiting.NONE && prompt.isNotBlank()) append("Запрошено у пользователя: ").append(prompt).append('\n')
         append("Ожидаемое действие: ").append(expectedAction).append('\n')
+        // Пояснение жизненного цикла — чтобы агент мог ОБЪЯСНИТЬ отказ при попытке пропустить этап.
+        // Само правило держит код (TRANSITIONS), это лишь текст для объяснения пользователю.
+        append("Жизненный цикл (этапы нельзя перепрыгивать): INTAKE → PLANNING → EXECUTION → VALIDATION → DONE. ")
+        append("Реализация — только после готового плана; завершение — только после проверки. Если пользователь ")
+        append("просит пропустить этап или сразу к финалу — объясни, что это невозможно, и назови ближайший допустимый шаг.\n")
         append("[/STATE]")
     }
 
@@ -103,8 +110,17 @@ data class TaskContext(
     }
 }
 
-/** Перевод в [target] с проверкой легальности перехода (нелегальный → исключение). */
-fun TaskContext.transitionTo(target: TaskState): TaskContext {
-    require(target in (TaskContext.TRANSITIONS[state] ?: emptySet())) { "Переход $state → $target запрещён" }
-    return copy(state = target)
-}
+/** Разрешён ли переход в [target] из текущего состояния (День 15). */
+fun TaskContext.canTransition(target: TaskState): Boolean =
+    target in (TaskContext.TRANSITIONS[state] ?: emptySet())
+
+/** Допустимые следующие состояния из текущего (для UI/диагностики). */
+fun TaskContext.allowedNext(): Set<TaskState> = TaskContext.TRANSITIONS[state] ?: emptySet()
+
+/** Безопасный переход: новое состояние или null, если переход недопустим (без исключения). */
+fun TaskContext.tryTransition(target: TaskState): TaskContext? =
+    if (canTransition(target)) copy(state = target) else null
+
+/** Перевод в [target] с проверкой легальности перехода (нелегальный → исключение — защита от «перепрыгивания»). */
+fun TaskContext.transitionTo(target: TaskState): TaskContext =
+    tryTransition(target) ?: error("Переход $state → $target запрещён (этапы нельзя перепрыгивать)")
