@@ -11,6 +11,25 @@ interface LlmGateway {
     suspend fun complete(messages: List<Message>): GatewayResponse
 }
 
+/**
+ * Порт к MCP-инструментам — доменный слой не знает про SDK/процессы/JSON-RPC.
+ * День 16: умеет подключиться и вернуть список доступных инструментов.
+ * Вызов инструментов (`callTool`) добавится в Дне 17.
+ */
+interface ToolGateway {
+    /** Установить MCP-соединение (поднять транспорт/сессию). */
+    suspend fun connect()
+
+    /** Получить список инструментов, объявленных MCP-сервером. */
+    suspend fun listTools(): List<Tool>
+
+    /** Вызвать инструмент по имени и вернуть его текстовый результат (День 16: ping → pong). */
+    suspend fun callTool(name: String, arguments: Map<String, Any?> = emptyMap()): String
+
+    /** Закрыть соединение и освободить ресурсы. */
+    suspend fun close()
+}
+
 /** Хранилище диалогов (персист между сессиями). */
 interface ConversationRepository {
     fun listMetas(): List<ConversationMeta>

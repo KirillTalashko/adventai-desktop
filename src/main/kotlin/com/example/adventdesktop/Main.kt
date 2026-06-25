@@ -12,6 +12,7 @@ import androidx.compose.ui.window.rememberWindowState
 import com.example.adventdesktop.data.AccountStore
 import com.example.adventdesktop.data.ConfigStore
 import com.example.adventdesktop.data.FileStore
+import com.example.adventdesktop.data.McpClient
 import com.example.adventdesktop.data.appHomeDir
 import com.example.adventdesktop.ui.App
 import com.example.adventdesktop.ui.ChatState
@@ -37,6 +38,7 @@ private fun rememberAppState(): ChatState {
         ChatState(
             accounts = AccountStore(store),
             configStore = ConfigStore(store),
+            toolGatewayFactory = { McpClient() },
             scope = scope
         )
     }
