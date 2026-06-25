@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -110,6 +111,7 @@ fun App(state: ChatState) {
         if (showProfile) ProfileDialog(state) { showProfile = false }
         if (showInvariants) InvariantsDialog(state) { showInvariants = false }
         if (state.interviewOpen) InterviewDialog(state)
+        if (state.mcpDialogOpen) McpToolsDialog(state)
     }
 }
 
@@ -379,6 +381,7 @@ private fun Composer(state: ChatState) {
                 )
                 Row(Modifier.fillMaxWidth().padding(start = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     AttachButton(state)
+                    McpButton(state)
                     DropdownChip(state.model.title, Models.all, { it.title }) { state.chooseModel(it) }
                     Spacer(Modifier.weight(1f))
                     if (state.sessionTokens > 0) {
@@ -416,6 +419,83 @@ private fun SendButton(state: ChatState) {
             }
         }
     }
+}
+
+/** Кнопка MCP в композере (рядом с «+») — подключиться к MCP-серверу и показать список инструментов. */
+@Composable
+private fun McpButton(state: ChatState) {
+    Surface(
+        onClick = { state.connectMcp() },
+        enabled = !state.mcpConnecting,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.size(34.dp)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            if (state.mcpConnecting) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+            } else {
+                Icon(Icons.Filled.Extension, "Инструменты MCP", Modifier.size(20.dp), tint = AppColors.accent)
+            }
+        }
+    }
+}
+
+/** Окно с результатом подключения к MCP: статус соединения и список доступных инструментов (День 16). */
+@Composable
+private fun McpToolsDialog(state: ChatState) {
+    AlertDialog(
+        onDismissRequest = { state.closeMcpDialog() },
+        confirmButton = { TextButton(onClick = { state.closeMcpDialog() }) { Text("Закрыть") } },
+        title = { Text("Инструменты MCP") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                when {
+                    state.mcpConnecting -> Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                        Text("Подключаюсь к MCP-серверу…")
+                    }
+                    state.mcpError != null -> Text("Ошибка: ${state.mcpError}", color = MaterialTheme.colorScheme.error)
+                    else -> {
+                        Text(
+                            "Соединение установлено. Доступно инструментов: ${state.mcpTools.size}",
+                            color = AppColors.accent,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        state.mcpTools.forEach { tool ->
+                            Column {
+                                Text("• ${tool.name}", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                                tool.description?.let {
+                                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                tool.inputSchema?.let {
+                                    Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                        HorizontalDivider()
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            TextButton(onClick = { state.pingMcp() }, enabled = !state.mcpPinging) {
+                                Text("Проверить связь (ping)")
+                            }
+                            if (state.mcpPinging) {
+                                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                            }
+                            state.mcpPingResult?.let {
+                                Text("→ $it", color = AppColors.accent, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    )
 }
 
 @Composable

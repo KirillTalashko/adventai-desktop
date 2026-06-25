@@ -16,5 +16,7 @@
 | [STATE_MACHINE.md](STATE_MACHINE.md) | конечный автомат задачи: агент на стадию, переходы в коде, pause/resume (День 13) |
 | [INVARIANTS.md](INVARIANTS.md) | инварианты состояния: хранение, инжект в промпт, страж, отказ при конфликте (День 14) |
 | [ANTIPATTERNS.md](ANTIPATTERNS.md) | чего не делать |
+| [MCP.md](MCP.md) | подключение к MCP: порт `ToolGateway`, клиент (stdio-подпроцесс), локальный сервер, кнопка в UI (День 16) |
+| [WEEK_4_MCP_AND_SKILLS.md](WEEK_4_MCP_AND_SKILLS.md) | дорожная карта Недели 4 (Дни 16–20): MCP-клиент, свой MCP-сервер, Skill+CLI, сравнение токенов |
 
 Точка входа проекта — `../CLAUDE.md`. Мета-промпт по дизайну — `../DESIGN_BRIEF.md`.

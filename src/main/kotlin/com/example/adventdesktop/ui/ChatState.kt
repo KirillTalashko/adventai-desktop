@@ -32,6 +32,8 @@ import com.example.adventdesktop.domain.TaskContext
 import com.example.adventdesktop.domain.TaskOrchestrator
 import com.example.adventdesktop.domain.TaskState
 import com.example.adventdesktop.domain.TaskStep
+import com.example.adventdesktop.domain.Tool
+import com.example.adventdesktop.domain.ToolGateway
 import com.example.adventdesktop.domain.UserProfile
 import com.example.adventdesktop.domain.VisaAgent
 import com.example.adventdesktop.domain.WorkingMemory
@@ -54,6 +56,7 @@ private const val MAX_AUTO_CHAIN = 16
 class ChatState(
     private val accounts: AccountStore,
     private val configStore: ConfigStore,
+    private val toolGatewayFactory: () -> ToolGateway,
     private val scope: CoroutineScope
 ) {
     // --- глобальное (общее для аккаунтов) ---
@@ -117,6 +120,21 @@ class ChatState(
     var loading by mutableStateOf(false)
         private set
     var error by mutableStateOf<String?>(null)
+
+    // --- MCP (День 16): подключение к серверу и список инструментов (демо в окне) ---
+    var mcpDialogOpen by mutableStateOf(false)
+        private set
+    var mcpConnecting by mutableStateOf(false)
+        private set
+    var mcpTools by mutableStateOf<List<Tool>>(emptyList())
+        private set
+    var mcpError by mutableStateOf<String?>(null)
+        private set
+    var mcpPinging by mutableStateOf(false)
+        private set
+    var mcpPingResult by mutableStateOf<String?>(null)
+        private set
+    private var mcpGateway: ToolGateway? = null
 
     init {
         rebuildAgent()
@@ -417,6 +435,51 @@ class ChatState(
         conversations?.save(updated)
     }
 
+    // --- MCP (День 16): живая демонстрация подключения в приложении ---
+
+    /** Подключиться к локальному MCP-серверу и получить список инструментов (показ в окне). */
+    fun connectMcp() {
+        if (mcpConnecting) return
+        mcpDialogOpen = true
+        mcpConnecting = true
+        mcpError = null
+        mcpTools = emptyList()
+        mcpPingResult = null
+        scope.launch {
+            val gateway = toolGatewayFactory()
+            mcpGateway = gateway
+            runCatching {
+                gateway.connect()
+                gateway.listTools()
+            }.onSuccess { mcpTools = it }
+                .onFailure { mcpError = it.message ?: "Не удалось подключиться к MCP" }
+            mcpConnecting = false
+        }
+    }
+
+    /** Вызвать инструмент `ping` на подключённом сервере — наглядная проверка «запрос → ответ». */
+    fun pingMcp() {
+        val gateway = mcpGateway ?: return
+        if (mcpPinging) return
+        mcpPinging = true
+        mcpPingResult = null
+        scope.launch {
+            runCatching { gateway.callTool("ping") }
+                .onSuccess { mcpPingResult = it }
+                .onFailure { mcpPingResult = "ошибка: ${it.message}" }
+            mcpPinging = false
+        }
+    }
+
+    /** Закрыть окно MCP и остановить серверный подпроцесс. */
+    fun closeMcpDialog() {
+        mcpDialogOpen = false
+        mcpPingResult = null
+        val gateway = mcpGateway
+        mcpGateway = null
+        scope.launch { runCatching { gateway?.close() } }
+    }
+
     // --- агент-разведчик: предложение доп-активности (пробное собеседование) ---
 
     /** После выполненного шага ищет, не предложить ли пробное собеседование (один раз за задачу). */
@@ -695,6 +758,7 @@ class ChatState(
     fun dispose() {
         client?.close()
         extractorClient?.close()
+        mcpGateway?.let { g -> scope.launch { runCatching { g.close() } } }
     }
 
     private fun rebuildAgent() {
