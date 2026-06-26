@@ -23,6 +23,7 @@ import java.io.File
  */
 class McpClient(
     private val serverMainClass: String = "com.example.adventdesktop.mcp.VisaMcpServerKt",
+    private val deepseekApiKey: String? = null,
 ) : ToolGateway {
 
     private val client = Client(
@@ -33,9 +34,11 @@ class McpClient(
     override suspend fun connect() {
         val javaBin = File(File(System.getProperty("java.home"), "bin"), "java").absolutePath
         val classpath = System.getProperty("java.class.path")
-        val process = ProcessBuilder(javaBin, "-Dfile.encoding=UTF-8", "-cp", classpath, serverMainClass)
+        val builder = ProcessBuilder(javaBin, "-Dfile.encoding=UTF-8", "-cp", classpath, serverMainClass)
             .redirectError(ProcessBuilder.Redirect.INHERIT) // stderr сервера — в нашу консоль
-            .start()
+        // Прокидываем ключ DeepSeek серверу (его внутренний LLM-агент структурирует визовую сводку).
+        if (!deepseekApiKey.isNullOrBlank()) builder.environment()["DEEPSEEK_API_KEY"] = deepseekApiKey
+        val process = builder.start()
         serverProcess = process
 
         val transport = StdioClientTransport(
