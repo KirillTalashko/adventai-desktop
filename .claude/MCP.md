@@ -53,6 +53,26 @@ ping: ChatState.pingMcp() → gateway.callTool("ping") → tools/call → "pong"
   `Get-CimInstance Win32_Process -Filter "Name='java.exe'" | ? { $_.CommandLine -like '*VisaMcpServerKt*' }`
   покажет процесс сервера; после «Закрыть» — исчезнет.
 
+## День 17 — `get_visa_requirements`: агент-исследователь внутри MCP
+
+Самодостаточный умный сервис — агентный RAG с самокритикой внутри MCP-сервера.
+
+- **`mcp/VisaSearch.kt`** — поиск и контент: `searchVisa` = **Tavily** (осн., `TAVILY_API_KEY`) → **DuckDuckGo**
+  (парсинг HTML-выдачи, без ключа); официальные домены (gov/gouv/mfa/vfsglobal/посольства) — вперёд.
+  Плюс `fetchReadable` (полный текст доступной страницы; Cloudflare/CAPTCHA пропускаются) и `wikipediaPolicy`
+  (аварийный фоллбэк, когда поиск пуст).
+- **`mcp/VisaResearchAgent.kt`** — цикл (≤3 раунда): стартовые запросы → раунд (поиск + дотягивание страниц,
+  dedup по URL) → **критик** (DeepSeek, строгий JSON `{done, missing, next_queries}`) → **синтез** (DeepSeek:
+  структура + цитаты на офиц. URL + «Пробелы» + дата + дисклеймер).
+- **`VisaMcpServer`** — тул `get_visa_requirements(destination, citizenship, purpose)`; ключи из env
+  (`DEEPSEEK_API_KEY` — агенты, `TAVILY_API_KEY` — поиск); при старте пишет в stderr диагностику
+  `visa-mcp ready: deepseek=…, tavily=…`. Без LLM — «сырой» вывод источников; без поиска — Wikipedia.
+- **UI** — в окне «Инструменты MCP» поля «Страна»/«Гражданство» + «Узнать» (`ChatState.callVisaRequirements`).
+
+Ключи серверу-подпроцессу: DeepSeek прокидывает `McpClient` через env процесса; Tavily наследуется окружением
+(`setx TAVILY_API_KEY …` → новое окно → `gradlew --stop`). Порталы подачи (France-Visas, кабинет VFS) под
+Cloudflare — не скрейпятся, поэтому ищем через поисковый индекс и цитируем найденные официальные URL.
+
 ## Грабли / решения
 
 - **Версия SDK = 0.10.0.** Новее (0.11+) собраны на Kotlin 2.3 (метаданные 2.3.0), а компилятор проекта —

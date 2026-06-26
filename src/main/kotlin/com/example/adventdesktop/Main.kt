@@ -38,7 +38,7 @@ private fun rememberAppState(): ChatState {
         ChatState(
             accounts = AccountStore(store),
             configStore = ConfigStore(store),
-            toolGatewayFactory = { McpClient() },
+            toolGatewayFactory = { key -> McpClient(deepseekApiKey = key) },
             scope = scope
         )
     }

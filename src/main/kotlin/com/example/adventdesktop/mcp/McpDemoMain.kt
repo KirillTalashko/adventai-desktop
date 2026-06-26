@@ -24,6 +24,12 @@ fun main() = runBlocking {
         t.inputSchema?.let { println("      input: $it") }
     }
 
+    println("\n→ Вызов ping…")
+    println("  ${gateway.callTool("ping")}")
+
+    println("\n→ Вызов get_visa_requirements(destination=Испания, citizenship=Россия)…")
+    println(gateway.callTool("get_visa_requirements", mapOf("destination" to "Испания", "citizenship" to "Россия", "purpose" to "туризм")))
+
     gateway.close()
-    println("✓ Готово.")
+    println("\n✓ Готово.")
 }

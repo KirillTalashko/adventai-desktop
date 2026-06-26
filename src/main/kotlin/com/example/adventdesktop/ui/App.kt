@@ -5,6 +5,8 @@ package com.example.adventdesktop.ui
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -38,6 +41,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -449,7 +453,10 @@ private fun McpToolsDialog(state: ChatState) {
         confirmButton = { TextButton(onClick = { state.closeMcpDialog() }) { Text("Закрыть") } },
         title = { Text("Инструменты MCP") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 when {
                     state.mcpConnecting -> Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -490,6 +497,48 @@ private fun McpToolsDialog(state: ChatState) {
                             state.mcpPingResult?.let {
                                 Text("→ $it", color = AppColors.accent, fontWeight = FontWeight.SemiBold)
                             }
+                        }
+                        HorizontalDivider()
+                        Text(
+                            "get_visa_requirements — умная визовая сводка (источник + дата, агент внутри MCP):",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        OutlinedTextField(
+                            value = state.mcpVisaCountry,
+                            onValueChange = { state.mcpVisaCountry = it },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Страна назначения") },
+                            placeholder = { Text("напр. Испания") }
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = state.mcpVisaCitizenship,
+                                onValueChange = { state.mcpVisaCitizenship = it },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f),
+                                label = { Text("Гражданство") }
+                            )
+                            TextButton(onClick = { state.callVisaRequirements() }, enabled = !state.mcpVisaLoading) {
+                                Text("Узнать")
+                            }
+                        }
+                        if (state.mcpVisaLoading) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                                Text("Собираю визовую сводку…")
+                            }
+                        }
+                        state.mcpVisaResult?.let {
+                            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
                         }
                     }
                 }

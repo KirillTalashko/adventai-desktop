@@ -56,7 +56,7 @@ private const val MAX_AUTO_CHAIN = 16
 class ChatState(
     private val accounts: AccountStore,
     private val configStore: ConfigStore,
-    private val toolGatewayFactory: () -> ToolGateway,
+    private val toolGatewayFactory: (deepseekKey: String?) -> ToolGateway,
     private val scope: CoroutineScope
 ) {
     // --- глобальное (общее для аккаунтов) ---
@@ -133,6 +133,12 @@ class ChatState(
     var mcpPinging by mutableStateOf(false)
         private set
     var mcpPingResult by mutableStateOf<String?>(null)
+        private set
+    var mcpVisaCountry by mutableStateOf("Испания")
+    var mcpVisaCitizenship by mutableStateOf("Россия")
+    var mcpVisaLoading by mutableStateOf(false)
+        private set
+    var mcpVisaResult by mutableStateOf<String?>(null)
         private set
     private var mcpGateway: ToolGateway? = null
 
@@ -445,8 +451,9 @@ class ChatState(
         mcpError = null
         mcpTools = emptyList()
         mcpPingResult = null
+        mcpVisaResult = null
         scope.launch {
-            val gateway = toolGatewayFactory()
+            val gateway = toolGatewayFactory(resolveLlmConfig(Models.byId("deepseek-chat"), config)?.apiKey)
             mcpGateway = gateway
             runCatching {
                 gateway.connect()
@@ -471,10 +478,32 @@ class ChatState(
         }
     }
 
+    /** Вызвать инструмент get_visa_requirements (День 17 — умный визовый сервис из приложения). */
+    fun callVisaRequirements() {
+        val gateway = mcpGateway ?: return
+        val destination = mcpVisaCountry.trim()
+        val citizenship = mcpVisaCitizenship.trim().ifBlank { "Россия" }
+        if (destination.isEmpty() || mcpVisaLoading) return
+        mcpVisaLoading = true
+        mcpVisaResult = null
+        scope.launch {
+            runCatching {
+                gateway.callTool(
+                    "get_visa_requirements",
+                    mapOf("destination" to destination, "citizenship" to citizenship, "purpose" to "туризм"),
+                )
+            }
+                .onSuccess { mcpVisaResult = it }
+                .onFailure { mcpVisaResult = "ошибка: ${it.message}" }
+            mcpVisaLoading = false
+        }
+    }
+
     /** Закрыть окно MCP и остановить серверный подпроцесс. */
     fun closeMcpDialog() {
         mcpDialogOpen = false
         mcpPingResult = null
+        mcpVisaResult = null
         val gateway = mcpGateway
         mcpGateway = null
         scope.launch { runCatching { gateway?.close() } }
