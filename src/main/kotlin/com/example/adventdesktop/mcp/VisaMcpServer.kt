@@ -377,8 +377,11 @@ fun main(): Unit = runBlocking {
     if (transportMode == "sse") {
         val port = System.getenv("MCP_PORT")?.trim()?.toIntOrNull() ?: 3001
         val token = System.getenv("MCP_AUTH_TOKEN")?.trim()?.ifBlank { null }
-        System.err.println("visa-mcp transport=sse host=0.0.0.0 port=$port auth=${token != null}")
-        embeddedServer(ServerCIO, host = "0.0.0.0", port = port) {
+        // Бинд по умолчанию на loopback (defense-in-depth): сервер живёт за reverse-proxy (Caddy на localhost),
+        // снаружи недоступен даже при сбое firewall. MCP_HOST=0.0.0.0 — только если нужен прямой внешний доступ.
+        val host = System.getenv("MCP_HOST")?.trim()?.ifBlank { null } ?: "127.0.0.1"
+        System.err.println("visa-mcp transport=sse host=$host port=$port auth=${token != null}")
+        embeddedServer(ServerCIO, host = host, port = port) {
             install(SSE)
             install(Authentication) {
                 bearer("mcp") {
