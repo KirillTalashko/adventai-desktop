@@ -2,6 +2,10 @@ package com.example.adventdesktop.mcp
 
 import com.example.adventdesktop.data.LlmClient
 import com.example.adventdesktop.data.LlmConfig
+import com.example.adventdesktop.data.appHomeDir
+import com.example.adventdesktop.mcp.scheduler.DigestCountry
+import com.example.adventdesktop.mcp.scheduler.DigestScheduler
+import com.example.adventdesktop.mcp.scheduler.DigestStore
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.cio.CIO
@@ -12,17 +16,33 @@ import io.ktor.client.statement.HttpResponse
 import io.ktor.http.headers
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
+import io.ktor.server.application.install
+import io.ktor.server.auth.Authentication
+import io.ktor.server.auth.UserIdPrincipal
+import io.ktor.server.auth.authenticate
+import io.ktor.server.auth.bearer
+import io.ktor.server.cio.CIO as ServerCIO
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.response.respondText
+import io.ktor.server.routing.get
+import io.ktor.server.routing.routing
+import io.ktor.server.sse.SSE
 import io.ktor.utils.io.streams.asInput
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
 import io.modelcontextprotocol.kotlin.sdk.server.StdioServerTransport
+import io.modelcontextprotocol.kotlin.sdk.server.mcp
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
 import io.modelcontextprotocol.kotlin.sdk.types.Implementation
 import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.types.ToolAnnotations
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import kotlinx.io.asSink
 import kotlinx.io.buffered
@@ -32,6 +52,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
+import java.io.File
 import java.time.LocalDate
 
 /**
@@ -129,7 +150,7 @@ private suspend fun HttpClient.fetchPolicyText(enName: String): Pair<String, Str
     return s.extract to link
 }
 
-fun main() = runBlocking {
+fun main(): Unit = runBlocking {
     val httpClient = createHttpClient()
     val deepseekKey = System.getenv("DEEPSEEK_API_KEY")?.trim().orEmpty()
     val llm: LlmClient? = if (deepseekKey.isNotBlank()) {
@@ -137,11 +158,36 @@ fun main() = runBlocking {
     } else null
     val tavilyKey = System.getenv("TAVILY_API_KEY")?.trim()?.ifBlank { null }
     val researchAgent = llm?.let { VisaResearchAgent(it, httpClient, tavilyKey) }
-    // Диагностика (в stderr — не мешает stdio-протоколу): видны ли серверу ключи.
-    System.err.println("visa-mcp ready: deepseek=${llm != null}, tavily=${tavilyKey != null}")
 
+    // --- День 18: планировщик дайджеста (SQLite + фоновый периодический сбор) ---
+    val dbPath = System.getenv("DIGEST_DB")?.trim()?.ifBlank { null }
+        ?: File(File(appHomeDir(), "scheduler"), "visa-digest.db").absolutePath
+    val intervalMin = System.getenv("DIGEST_INTERVAL_MINUTES")?.trim()?.toLongOrNull() ?: 360L
+    val store = DigestStore(dbPath)
+    // Сбор сводки по одной стране — тем же внутренним research-агентом, что и get_visa_requirements.
+    val collect: suspend (DigestCountry) -> Pair<String, String>? = collect@{ c ->
+        val agent = researchAgent ?: return@collect null
+        val enName = toEnglish(c.destination)
+        val portal = officialPortal(enName) ?: "(уточните официальный визовый портал страны)"
+        val summary = runCatching {
+            agent.research(c.destination, enName, c.citizenship, c.purpose, portal, LocalDate.now().toString())
+        }.getOrNull()
+        summary?.let { it to "" }
+    }
+    val scheduler = DigestScheduler(store, intervalMin, collect)
+    val schedulerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    if (researchAgent != null) scheduler.start(schedulerScope)
+
+    // Диагностика (в stderr — не мешает stdio-протоколу): ключи + где БД дайджеста и интервал.
+    System.err.println(
+        "visa-mcp ready: deepseek=${llm != null}, tavily=${tavilyKey != null}, " +
+            "digestDb=$dbPath, intervalMin=$intervalMin",
+    )
+
+    // Сборка свежего Server со всеми тулзами — вызывается один раз для stdio и на каждую SSE-сессию.
+    fun buildServer(): Server {
     val server = Server(
-        Implementation(name = "visa-mcp", version = "0.3.0"),
+        Implementation(name = "visa-mcp", version = "0.4.0"),
         ServerOptions(capabilities = ServerCapabilities(tools = ServerCapabilities.Tools(listChanged = true))),
     )
 
@@ -221,9 +267,137 @@ fun main() = runBlocking {
         )))
     }
 
-    val transport = StdioServerTransport(System.`in`.asInput(), System.out.asSink().buffered())
-    val session = server.createSession(transport)
-    val done = Job()
-    session.onClose { done.complete() }
-    done.join()
+    // Тул 3 — подписать страну на периодический дайджест (+ сразу первый сбор).
+    server.addTool(
+        name = "add_digest_country",
+        description = "Подписать страну на ПЕРИОДИЧЕСКИЙ визовый дайджест: планировщик будет регулярно собирать " +
+            "свежую сводку и копить историю снимков. Делает первый сбор сразу. " +
+            "Вход: destination (страна), citizenship (по умолч. «Россия»), purpose (по умолч. «туризм»).",
+        inputSchema = ToolSchema(
+            properties = buildJsonObject {
+                putJsonObject("destination") { put("type", "string"); put("description", "Страна, напр. «Германия»") }
+                putJsonObject("citizenship") { put("type", "string"); put("description", "Гражданство, по умолч. «Россия»") }
+                putJsonObject("purpose") { put("type", "string"); put("description", "Цель поездки, по умолч. «туризм»") }
+            },
+            required = listOf("destination"),
+        ),
+        toolAnnotations = ToolAnnotations(readOnlyHint = false, openWorldHint = true),
+    ) { request ->
+        val args = request.arguments
+        val destination = args?.get("destination")?.jsonPrimitive?.content?.trim().orEmpty()
+        val citizenship = args?.get("citizenship")?.jsonPrimitive?.content?.trim().orEmpty().ifBlank { "Россия" }
+        val purpose = args?.get("purpose")?.jsonPrimitive?.content?.trim().orEmpty().ifBlank { "туризм" }
+        if (destination.isBlank()) {
+            return@addTool CallToolResult(content = listOf(TextContent("Параметр «destination» обязателен.")))
+        }
+        val country = store.addCountry(destination, citizenship, purpose)
+        runCatching { scheduler.collectOne(country) }   // первый снимок сразу (если есть LLM-агент)
+        val count = store.snapshotCount(country.id)
+        CallToolResult(content = listOf(TextContent(
+            "Подписка добавлена: $destination ($citizenship, $purpose). Снимков в истории: $count. " +
+                "Планировщик будет обновлять сводку раз в $intervalMin мин. Сводку смотри в get_visa_digest.",
+        )))
+    }
+
+    // Тул 4 — список подписок дайджеста.
+    server.addTool(
+        name = "list_digest_countries",
+        description = "Список стран, подписанных на периодический визовый дайджест (с числом собранных снимков).",
+        inputSchema = ToolSchema(properties = buildJsonObject {}, required = emptyList()),
+        toolAnnotations = ToolAnnotations(readOnlyHint = true, openWorldHint = false),
+    ) { _ ->
+        val countries = store.listCountries()
+        val text = if (countries.isEmpty()) {
+            "Подписок нет. Добавьте страну через add_digest_country."
+        } else {
+            countries.joinToString("\n") { c ->
+                val last = store.latestSnapshot(c.id)?.collectedAt ?: "ещё не собирали"
+                "• ${c.destination} (${c.citizenship}, ${c.purpose}) — снимков: ${store.snapshotCount(c.id)}, последний: $last"
+            }
+        }
+        CallToolResult(content = listOf(TextContent(text)))
+    }
+
+    // Тул 5 — отписать страну от дайджеста.
+    server.addTool(
+        name = "remove_digest_country",
+        description = "Отписать страну от периодического дайджеста (удаляет подписку и её снимки). Вход: destination.",
+        inputSchema = ToolSchema(
+            properties = buildJsonObject {
+                putJsonObject("destination") { put("type", "string"); put("description", "Страна, напр. «Германия»") }
+            },
+            required = listOf("destination"),
+        ),
+        toolAnnotations = ToolAnnotations(readOnlyHint = false, openWorldHint = false),
+    ) { request ->
+        val destination = request.arguments?.get("destination")?.jsonPrimitive?.content?.trim().orEmpty()
+        if (destination.isBlank()) {
+            return@addTool CallToolResult(content = listOf(TextContent("Параметр «destination» обязателен.")))
+        }
+        val removed = store.removeCountry(destination)
+        CallToolResult(content = listOf(TextContent(
+            if (removed > 0) "Отписано: $destination." else "Подписка на «$destination» не найдена.",
+        )))
+    }
+
+    // Тул 6 — АГРЕГИРОВАННЫЙ дайджест: по каждой стране свежайшая сводка из накопленных снимков.
+    server.addTool(
+        name = "get_visa_digest",
+        description = "Агрегированный визовый дайджест: по каждой подписанной стране — последняя собранная " +
+            "планировщиком сводка (требования/сборы/сроки/источники), когда собрана и сколько снимков в истории. " +
+            "Это результат фоновой работы агента 24/7.",
+        inputSchema = ToolSchema(properties = buildJsonObject {}, required = emptyList()),
+        toolAnnotations = ToolAnnotations(readOnlyHint = true, openWorldHint = false),
+    ) { _ ->
+        val countries = store.listCountries()
+        val text = if (countries.isEmpty()) {
+            "Подписок нет. Добавьте страну через add_digest_country, и планировщик начнёт собирать дайджест."
+        } else buildString {
+            appendLine("📋 Визовый дайджест (сформирован: ${LocalDate.now()})")
+            for (c in countries) {
+                val snap = store.latestSnapshot(c.id)
+                appendLine()
+                appendLine("=== ${c.destination} (${c.citizenship}, ${c.purpose}) — снимков: ${store.snapshotCount(c.id)} ===")
+                if (snap == null) {
+                    appendLine("Сводка ещё не собрана (ожидается ближайший прогон планировщика).")
+                } else {
+                    appendLine("Собрано: ${snap.collectedAt}")
+                    appendLine(snap.summary.take(1400).let { if (it.length < snap.summary.length) "$it\n…(сокращено)" else it })
+                }
+            }
+        }
+        CallToolResult(content = listOf(TextContent(text)))
+    }
+
+        return server
+    }
+
+    // --- Транспорт: stdio (локально, подпроцесс приложения) или SSE (remote — для VPS за Caddy) ---
+    val transportMode = System.getenv("MCP_TRANSPORT")?.trim()?.lowercase()?.ifBlank { null } ?: "stdio"
+    if (transportMode == "sse") {
+        val port = System.getenv("MCP_PORT")?.trim()?.toIntOrNull() ?: 3001
+        val token = System.getenv("MCP_AUTH_TOKEN")?.trim()?.ifBlank { null }
+        System.err.println("visa-mcp transport=sse host=0.0.0.0 port=$port auth=${token != null}")
+        embeddedServer(ServerCIO, host = "0.0.0.0", port = port) {
+            install(SSE)
+            install(Authentication) {
+                bearer("mcp") {
+                    authenticate { cred -> if (token != null && cred.token == token) UserIdPrincipal("client") else null }
+                }
+            }
+            routing {
+                get("/health") { call.respondText("ok") }   // без авторизации — для проверки/Caddy
+                if (token != null) authenticate("mcp") { mcp { buildServer() } } else mcp { buildServer() }
+            }
+        }.start(wait = true)
+    } else {
+        val server = buildServer()
+        val transport = StdioServerTransport(System.`in`.asInput(), System.out.asSink().buffered())
+        val session = server.createSession(transport)
+        val done = Job()
+        session.onClose { done.complete() }
+        done.join()
+        schedulerScope.cancel()
+        store.close()
+    }
 }

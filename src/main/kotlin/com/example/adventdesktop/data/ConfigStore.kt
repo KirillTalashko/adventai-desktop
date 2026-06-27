@@ -6,7 +6,10 @@ import java.io.File
 data class DesktopConfig(
     val openrouterKey: String,
     val deepseekKey: String,
-    val modelId: String
+    val modelId: String,
+    // День 18: удалённый MCP-сервер (VPS). Если URL задан — агент ходит за инструментами туда (SSE+токен).
+    val mcpRemoteUrl: String = "",
+    val mcpRemoteToken: String = "",
 ) {
     fun keyFor(provider: String): String = if (provider == "deepseek") deepseekKey else openrouterKey
 }
@@ -28,7 +31,9 @@ class ConfigStore(private val store: FileStore) {
         return DesktopConfig(
             openrouterKey = openrouter.trim(),
             deepseekKey = deepseek.trim(),
-            modelId = dto.modelId
+            modelId = dto.modelId,
+            mcpRemoteUrl = dto.mcpRemoteUrl.ifBlank { System.getenv("MCP_REMOTE_URL").orEmpty() }.trim(),
+            mcpRemoteToken = dto.mcpRemoteToken.ifBlank { System.getenv("MCP_REMOTE_TOKEN").orEmpty() }.trim(),
         )
     }
 
@@ -39,7 +44,9 @@ class ConfigStore(private val store: FileStore) {
                 AppConfigDto(
                     openrouterKey = config.openrouterKey,
                     deepseekKey = config.deepseekKey,
-                    modelId = config.modelId
+                    modelId = config.modelId,
+                    mcpRemoteUrl = config.mcpRemoteUrl,
+                    mcpRemoteToken = config.mcpRemoteToken,
                 )
             )
         )
