@@ -2,6 +2,7 @@ package com.example.adventdesktop.data
 
 import com.example.adventdesktop.domain.Account
 import com.example.adventdesktop.domain.Awaiting
+import com.example.adventdesktop.domain.CaseFile
 import com.example.adventdesktop.domain.Conversation
 import com.example.adventdesktop.domain.Invariant
 import com.example.adventdesktop.domain.ConversationMeta
@@ -64,7 +65,21 @@ internal data class TaskContextDto(
     val revises: Int = 0,
     val offer: String = "",
     val interviewOffered: Boolean = false,
-    val paused: Boolean = false
+    val paused: Boolean = false,
+    val caseFile: CaseFileDto = CaseFileDto(),
+    val pivotTo: String = ""
+)
+
+@Serializable
+internal data class CaseFileDto(
+    val destination: String = "",
+    val citizenship: String = "",
+    val purpose: String = "",
+    val timeframe: String = "",
+    val travelers: String = "",
+    val employment: String = "",
+    val history: String = "",
+    val city: String = ""
 )
 
 @Serializable
@@ -87,7 +102,9 @@ internal data class WorkingMemoryDto(val goal: String = "", val constraints: Lis
 internal data class AppConfigDto(
     val openrouterKey: String = "",
     val deepseekKey: String = "",
-    val modelId: String = ""
+    val modelId: String = "",
+    val mcpRemoteUrl: String = "",
+    val mcpRemoteToken: String = "",
 )
 
 // --- мапперы DTO <-> domain ---
@@ -108,19 +125,24 @@ internal fun Message.toDto(): MessageDto = MessageDto(role.wire, text, createdAt
 internal fun DerivedDto.toDomain() = Derived(summary, summarizedCount, facts, factsCount)
 internal fun Derived.toDto() = DerivedDto(summary, summarizedCount, facts, factsCount)
 
+internal fun CaseFileDto.toDomain() = CaseFile(destination, citizenship, purpose, timeframe, travelers, employment, history, city)
+internal fun CaseFile.toDto() = CaseFileDto(destination, citizenship, purpose, timeframe, travelers, employment, history, city)
+
 internal fun TaskContextDto.toDomain() = TaskContext(
     task = task,
     state = TaskState.entries.firstOrNull { it.name == state } ?: TaskState.INTAKE,
     awaiting = Awaiting.entries.firstOrNull { it.name == awaiting } ?: Awaiting.NONE,
     prompt = prompt, options = options, approach = approach,
     plan = plan, step = step, done = done, docs = docs, pending = pending, note = note, revises = revises,
-    offer = offer, interviewOffered = interviewOffered, paused = paused
+    offer = offer, interviewOffered = interviewOffered, paused = paused,
+    caseFile = caseFile.toDomain(), pivotTo = pivotTo
 )
 
 internal fun TaskContext.toDto() = TaskContextDto(
     task = task, state = state.name, awaiting = awaiting.name, prompt = prompt, options = options,
     approach = approach, plan = plan, step = step, done = done, docs = docs, pending = pending, note = note,
-    revises = revises, offer = offer, interviewOffered = interviewOffered, paused = paused
+    revises = revises, offer = offer, interviewOffered = interviewOffered, paused = paused,
+    caseFile = caseFile.toDto(), pivotTo = pivotTo
 )
 
 internal fun ConversationDto.toDomain(): Conversation =

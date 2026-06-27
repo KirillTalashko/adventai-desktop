@@ -38,7 +38,11 @@ private fun rememberAppState(): ChatState {
         ChatState(
             accounts = AccountStore(store),
             configStore = ConfigStore(store),
-            toolGatewayFactory = { key -> McpClient(deepseekApiKey = key) },
+            // День 18: задан URL удалённого MCP (VPS) → ходим туда по SSE+токен; иначе локальный подпроцесс.
+            toolGatewayFactory = { key, url, token ->
+                if (!url.isNullOrBlank()) McpClient(sseUrl = url, authToken = token)
+                else McpClient(deepseekApiKey = key)
+            },
             scope = scope
         )
     }

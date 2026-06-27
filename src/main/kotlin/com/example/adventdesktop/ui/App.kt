@@ -467,11 +467,24 @@ private fun McpToolsDialog(state: ChatState) {
                     }
                     state.mcpError != null -> Text("Ошибка: ${state.mcpError}", color = MaterialTheme.colorScheme.error)
                     else -> {
-                        Text(
-                            "Соединение установлено. Доступно инструментов: ${state.mcpTools.size}",
-                            color = AppColors.accent,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                        Surface(
+                            color = AppColors.accent.copy(alpha = 0.10f),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    if (state.mcpIsRemote) "🟢 Удалённый MCP-сервер · развёрнут, работает 24/7"
+                                    else "🟢 Локальный MCP-сервер (подпроцесс)",
+                                    color = AppColors.accent, fontWeight = FontWeight.SemiBold
+                                )
+                                Text(state.mcpServerUrl, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(
+                                    "Инструменты ниже получены С СЕРВЕРА: ${state.mcpTools.size}",
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                         state.mcpTools.forEach { tool ->
                             Column {
                                 Text("• ${tool.name}", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
@@ -488,14 +501,14 @@ private fun McpToolsDialog(state: ChatState) {
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            TextButton(onClick = { state.pingMcp() }, enabled = !state.mcpPinging) {
-                                Text("Проверить связь (ping)")
+                            TextButton(onClick = { state.checkConnection() }, enabled = !state.mcpChecking) {
+                                Text("Проверить связь")
                             }
-                            if (state.mcpPinging) {
+                            if (state.mcpChecking) {
                                 CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
                             }
-                            state.mcpPingResult?.let {
-                                Text("→ $it", color = AppColors.accent, fontWeight = FontWeight.SemiBold)
+                            state.mcpCheckResult?.let {
+                                Text(it, color = AppColors.accent, fontWeight = FontWeight.SemiBold)
                             }
                         }
                         HorizontalDivider()
@@ -538,6 +551,10 @@ private fun McpToolsDialog(state: ChatState) {
                             }
                         }
                         state.mcpVisaResult?.let {
+                            Text(
+                                "↓ ответ получен С СЕРВЕРА (живой запрос):",
+                                style = MaterialTheme.typography.labelSmall, color = AppColors.accent, fontWeight = FontWeight.SemiBold
+                            )
                             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
                         }
                     }

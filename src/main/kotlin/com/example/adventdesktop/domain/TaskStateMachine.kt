@@ -34,7 +34,9 @@ data class TaskContext(
     val revises: Int = 0,                     // сколько раз валидатор уже отправлял на доработку (лимит петли)
     val offer: String = "",                   // активное предложение доп-активности (агент-разведчик); пусто = нет
     val interviewOffered: Boolean = false,    // пробное собеседование уже предлагали (не повторять)
-    val paused: Boolean = false
+    val paused: Boolean = false,
+    val caseFile: CaseFile = CaseFile(),      // День 18 «оркестр»: структурное досье — источник фактов всех стадий
+    val pivotTo: String = ""                  // ждём подтверждения разворота на эту страну (пусто = нет)
 ) {
     val total: Int get() = plan.size
     val current: String get() = plan.getOrNull(step).orEmpty()
@@ -60,6 +62,8 @@ data class TaskContext(
     fun renderStateBlock(): String = buildString {
         append("[STATE]\n")
         append("Задача: ").append(task).append('\n')
+        val dossier = caseFile.renderBlock()
+        if (dossier.isNotEmpty()) append(dossier).append('\n')
         if (approach.isNotBlank()) append("Выбранный подход: ").append(approach).append('\n')
         append("Этап: ").append(state.name)
         if (state == TaskState.EXECUTION && total > 0) append(" (шаг ").append(step + 1).append(" из ").append(total).append(')')
