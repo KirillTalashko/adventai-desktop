@@ -87,7 +87,9 @@ internal data class WorkingMemoryDto(val goal: String = "", val constraints: Lis
 internal data class AppConfigDto(
     val openrouterKey: String = "",
     val deepseekKey: String = "",
-    val modelId: String = ""
+    val modelId: String = "",
+    val mcpRemoteUrl: String = "",
+    val mcpRemoteToken: String = "",
 )
 
 // --- мапперы DTO <-> domain ---

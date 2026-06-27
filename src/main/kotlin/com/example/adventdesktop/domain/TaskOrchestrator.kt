@@ -17,7 +17,8 @@ class TaskOrchestrator(
     private val gateway: LlmGateway,
     private val guard: InvariantGuard? = null,
     private val basePrompt: String = VISA_SYSTEM_PROMPT,
-    private val windowSize: Int = 12
+    private val windowSize: Int = 12,
+    private val tools: ToolGateway? = null
 ) {
     /** Активные инварианты аккаунта (День 14) — инжектятся во все стадийные запросы. Обновляет [ChatState]. */
     var invariants: List<Invariant> = emptyList()
@@ -26,11 +27,13 @@ class TaskOrchestrator(
      * `[READY]` → PLANNING; иначе ждём ответ пользователя.
      */
     suspend fun intake(ctx: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatching {
-        val resp = call(INTERVIEWER, ctx, history, profile, "Оцени запрос: ответь сразу, уточни недостающее или подтверди готовность к плану.", guarded = true)
+        val resp = call(INTERVIEWER, ctx, history, profile, "Оцени запрос: ответь сразу, уточни недостающее или подтверди готовность к плану.", guarded = true, useTools = true)
+        val body = clean(resp.text)
+        val shown = withTrace(resp, ctx.docs)
         when {
-            hasTag(resp.text, "SIMPLE") -> TaskStep(AgentReply(clean(resp.text), resp.usage), ctx, cancel = true)
-            hasTag(resp.text, "READY") -> TaskStep(AgentReply(clean(resp.text), resp.usage), ctx.copy(awaiting = Awaiting.NONE, prompt = "").transitionTo(TaskState.PLANNING))
-            else -> TaskStep(AgentReply(clean(resp.text), resp.usage), ctx.copy(awaiting = Awaiting.ANSWER, prompt = clean(resp.text)))
+            hasTag(resp.text, "SIMPLE") -> TaskStep(AgentReply(shown, resp.usage), ctx, cancel = true)
+            hasTag(resp.text, "READY") -> TaskStep(AgentReply(shown, resp.usage), ctx.copy(awaiting = Awaiting.NONE, prompt = "").transitionTo(TaskState.PLANNING))
+            else -> TaskStep(AgentReply(shown, resp.usage), ctx.copy(awaiting = Awaiting.ANSWER, prompt = body))
         }
     }
 
@@ -83,7 +86,7 @@ class TaskOrchestrator(
             pending = addPending(ctx.pending, needDoc), step = ctx.step + 1, awaiting = Awaiting.NONE, prompt = ""
         )
         val next = if (advanced.total > 0 && advanced.step >= advanced.total) advanced.transitionTo(TaskState.VALIDATION) else advanced
-        return TaskStep(AgentReply(clean(resp.text), resp.usage), next)
+        return TaskStep(AgentReply(reconcileChecklist(clean(resp.text), ctx.docs), resp.usage), next)
     }
 
     /** Аккуратно добавить документ в «понадобится позже»: короткий ярлык, без дублей и без раздувания (#4). */
@@ -110,13 +113,42 @@ class TaskOrchestrator(
             verdict.startsWith("revise", ignoreCase = true) -> ctx.copy(note = feedback).transitionTo(TaskState.DONE)
             else -> ctx
         }
-        return TaskStep(AgentReply(clean(resp.text), resp.usage), next)
+        return TaskStep(AgentReply(reconcileChecklist(clean(resp.text), ctx.docs), resp.usage), next)
     }
 
     /** Ответ на вопрос/реплику пользователя в контексте задачи БЕЗ изменения состояния автомата (#2). */
     suspend fun assist(ctx: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatching {
-        val resp = call(ASSISTANT, ctx, history, profile, "Ответь на последнее сообщение пользователя по существу, опираясь на [STATE]. Не выполняй шаги и не меняй план.", historyLimit = 8, guarded = true)
-        TaskStep(AgentReply(clean(resp.text), resp.usage), ctx)
+        val resp = call(ASSISTANT, ctx, history, profile, "Ответь на последнее сообщение пользователя по существу, опираясь на [STATE]. Не выполняй шаги и не меняй план.", historyLimit = 8, guarded = true, useTools = true)
+        TaskStep(AgentReply(withTrace(resp, ctx.docs), resp.usage), ctx)
+    }
+
+    /** Префикс-трейс вызванных инструментов — видно в чате, что агент сходил в MCP (Фаза 2). */
+    private fun withTrace(resp: GatewayResponse, docs: List<String>): String {
+        val body = reconcileChecklist(clean(resp.text), docs)
+        if (resp.toolCalls.isEmpty()) return body
+        val header = resp.toolCalls.joinToString("\n") { "🔧 $it" }
+        return if (body.isEmpty()) header else "$header\n\n$body"
+    }
+
+    /**
+     * Защита от фантомного «загружен»: статус в [checklist] правим по РЕАЛЬНЫМ [docs]. Статус — свободный
+     * текст модели (UI красит по слову), поэтому со слов пользователя «у меня есть» мог появиться «загружен»,
+     * хотя файл не приложен. Если документа нет среди приложенных — понижаем «загружен»/«проверен» до «нужен».
+     */
+    private fun reconcileChecklist(text: String, docs: List<String>): String {
+        if (!text.contains(';')) return text
+        val docKeys = docs.map { it.substringBefore('→').substringBefore("->").trim().lowercase() }
+            .filter { it.isNotEmpty() }
+        return text.lineSequence().joinToString("\n") { line ->
+            if (!line.trimStart().startsWith("-")) return@joinToString line   // только пункты чек-листа
+            val sep = line.lastIndexOf(';')
+            if (sep < 0) return@joinToString line
+            val status = line.substring(sep + 1).trim().lowercase()
+            if (!status.startsWith("загруж") && !status.startsWith("провер")) return@joinToString line
+            val label = line.substring(0, sep).removePrefix("-").trim().lowercase()
+            val backed = docKeys.any { k -> label.contains(k) || k.contains(label) }
+            if (backed) line else line.substring(0, sep) + "; нужен"
+        }
     }
 
     /** Сборка запроса стадии: базовый промпт + роль + [STATE] (+ профиль) + окно истории + инструкция. */
@@ -127,10 +159,15 @@ class TaskOrchestrator(
         profile: UserProfile?,
         instruction: String,
         historyLimit: Int = windowSize,
-        guarded: Boolean = false
+        guarded: Boolean = false,
+        useTools: Boolean = false
     ): GatewayResponse {
         val system = buildString {
-            append(basePrompt).append("\n\n").append(rolePrompt)
+            append(basePrompt)
+            // Текущая дата: без неё модель считает год по памяти (выдаёт сроки в прошлом). Источник истины — часы.
+            append("\n\nСегодня: ").append(java.time.LocalDate.now())
+            append(". Используй ИМЕННО эту дату для всех расчётов сроков и дедлайнов; не определяй год по памяти.")
+            append("\n\n").append(rolePrompt)
             append("\n\n").append(ctx.renderStateBlock())
             val inv = renderInvariantsBlock(invariants)
             if (inv.isNotEmpty()) append("\n\n").append(inv)
@@ -145,7 +182,12 @@ class TaskOrchestrator(
             addAll(history.takeLast(historyLimit))
             add(Message(Role.User, instruction))
         }
-        var resp = gateway.complete(messages)
+        // Фаза 2: на «отвечающих» стадиях даём модели MCP-инструменты; tool-loop ведёт LlmClient.
+        val gw = tools
+        val toolList = if (useTools && gw != null) runCatching { gw.listTools() }.getOrDefault(emptyList()) else emptyList()
+        val executeTool: (suspend (String, String) -> String)? =
+            if (gw != null && toolList.isNotEmpty()) { name, args -> gw.callToolJson(name, args) } else null
+        var resp = gateway.complete(messages, toolList, executeTool)
         // Двойная защита (День 14): на пользовательских стадиях страж проверяет ответ; при нарушении —
         // одна перегенерация в обоснованный отказ. Инжект инвариантов выше — первый рубеж, страж — второй.
         if (guarded && guard != null) {
@@ -165,8 +207,13 @@ class TaskOrchestrator(
     // --- разбор сигналов и очистка текста ---
 
     private fun parseList(text: String, tag: String): List<String> {
-        val block = Regex("\\[$tag](.*?)\\[/$tag]", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
-            .find(text)?.groupValues?.get(1) ?: return emptyList()
+        val open = "[$tag]"
+        val start = text.indexOf(open, ignoreCase = true)
+        if (start < 0) return emptyList()
+        val from = start + open.length
+        // Терпим незакрытый блок: если нет [/tag] — берём до конца текста.
+        val end = text.indexOf("[/$tag]", from, ignoreCase = true).let { if (it >= 0) it else text.length }
+        val block = text.substring(from, end)
         return block.lineSequence()
             .map { it.trim().removePrefix("-").trim().replace(Regex("^\\d+[.)]\\s*"), "").trim() }
             .filter { it.isNotEmpty() }
@@ -181,9 +228,10 @@ class TaskOrchestrator(
     /** Вырезать управляющие теги — пользователь видит чистый ответ («под капотом»). */
     private fun clean(text: String): String {
         val dotAll = setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)
+        // Вырезаем блоки целиком; терпим незакрытый тег (до конца текста), чтобы сырой [PLAN] не утёк.
         var t = text
-            .replace(Regex("\\[OPTIONS].*?\\[/OPTIONS]", dotAll), "")
-            .replace(Regex("\\[PLAN].*?\\[/PLAN]", dotAll), "")
+            .replace(Regex("\\[OPTIONS][\\s\\S]*?(?:\\[/OPTIONS]|\\z)", setOf(RegexOption.IGNORE_CASE)), "")
+            .replace(Regex("\\[PLAN][\\s\\S]*?(?:\\[/PLAN]|\\z)", setOf(RegexOption.IGNORE_CASE)), "")
         t = t.lineSequence().filterNot { line ->
             val u = line.trim()
             CONTROL_TAGS.any { u.startsWith(it, ignoreCase = true) }
@@ -203,15 +251,28 @@ class TaskOrchestrator(
             "план — только информируй и советуй.\n" +
             "Если пользователь просит ПРОПУСТИТЬ этап или сразу перейти к финалу (например, завершить без проверки или " +
             "делать реализацию без готового плана) — объясни, что жизненный цикл задачи строгий и этапы нельзя " +
-            "перепрыгивать (см. [STATE]); назови ближайший допустимый шаг. Переходами управляет система, не ты."
+            "перепрыгивать (см. [STATE]); назови ближайший допустимый шаг. Переходами управляет система, не ты.\n" +
+            "Если нужны АКТУАЛЬНЫЕ визовые требования по стране (нужна ли виза, документы, сборы, сроки, куда подавать) — " +
+            "вызови инструмент get_visa_requirements(destination, citizenship, purpose): он вернёт официальные данные " +
+            "с источниками и датой. Конкретные сборы, сроки и перечни документов НЕ бери по памяти — вызови инструмент " +
+            "и приводи ссылки на источники и дату; по памяти отвечай только на общие вопросы без точных цифр."
 
-        const val INTERVIEWER = "Ты — ИНТЕРВЬЮЕР. Этап INTAKE конечного автомата задачи. Будь лоялен: по возможности " +
-            "двигай задачу вперёд, не засыпай вопросами.\n" +
-            "• ПРОСТОЙ вопрос (ответ без процесса) — ответь по существу и заверши строкой [SIMPLE].\n" +
-            "• Если это многошаговая визовая задача и данных в целом достаточно (разумные детали можно предположить) " +
-            "— кратко подтверди и заверши строкой [READY].\n" +
-            "• Задай 1–2 КОРОТКИХ вопроса и заверши [ASK] ТОЛЬКО если без ключевого факта (страна / тип визы / " +
-            "гражданство) план будет бессмысленным. План не строй."
+        const val INTERVIEWER = "Ты — ИНТЕРВЬЮЕР. Этап INTAKE. Цель — БЫСТРО довести до плана, не зацикливаясь на " +
+            "уточнениях. Выбери ОДНУ ветку по ПРИОРИТЕТУ (сверху вниз) и заверши ровно одним тегом:\n" +
+            "1) ПРИВЕТСТВИЕ / болтовня / вопрос о твоих возможностях, где в САМОМ сообщении нет конкретной страны и " +
+            "визовой цели — коротко представься, предложи задать визовый вопрос, заверши [SIMPLE]. Страну/месяц из " +
+            "профиля или прошлых диалогов при этом ИГНОРИРУЙ: не подставляй их и не спрашивай о них. Инструмент не зови.\n" +
+            "2) Явная просьба ОФОРМИТЬ / ПОДГОТОВИТЬСЯ к визе, когда известны страна и гражданство (из сообщения ИЛИ " +
+            "профиля) — вызови get_visa_requirements, кратко покажи ключевые требования (источник + дата) и заверши " +
+            "[READY]. Разумные детали ПРЕДПОЛОЖИ сам; факты, которые пользователь уже назвал (договор/диплом на руках, " +
+            "тип визы и т.п.), СЧИТАЙ истинными и НЕ переспрашивай. Допустим максимум ОДИН короткий вопрос и только если " +
+            "без него план реально невозможен — иначе сразу [READY].\n" +
+            "3) Информационный визовый вопрос по КОНКРЕТНОЙ стране (нужна ли виза / документы / сборы / сроки / куда " +
+            "подавать) — вызови get_visa_requirements и дай ПОЛНЫЙ ответ по его данным (источник + дата), заверши [SIMPLE].\n" +
+            "4) Не хватает САМОГО ключевого (страна / тип визы / гражданство) и подставить неоткуда — задай 1–2 коротких " +
+            "вопроса, заверши [ASK].\n" +
+            "ЗАПРЕТЫ: не пиши «данных достаточно» и подобные пустые фразы; конкретные требования/сборы/сроки бери ТОЛЬКО " +
+            "из инструмента (нужны снова — вызови ЗАНОВО), не выдумывай по памяти; план не строй — это сделает планировщик."
 
         const val PLANNER_OPTIONS = "Ты — ПЛАНИРОВЩИК. Этап PLANNING, выбор подхода.\n" +
             "По [STATE] предложи РОВНО 4 РАЗНЫХ подхода к решению (разные стратегии/приоритеты, напр.: быстрее всего; " +

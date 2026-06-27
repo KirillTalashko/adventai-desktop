@@ -56,7 +56,7 @@ private const val MAX_AUTO_CHAIN = 16
 class ChatState(
     private val accounts: AccountStore,
     private val configStore: ConfigStore,
-    private val toolGatewayFactory: (deepseekKey: String?) -> ToolGateway,
+    private val toolGatewayFactory: (deepseekKey: String?, remoteUrl: String?, remoteToken: String?) -> ToolGateway,
     private val scope: CoroutineScope
 ) {
     // --- глобальное (общее для аккаунтов) ---
@@ -71,6 +71,8 @@ class ChatState(
     private var memoryExtractor: MemoryExtractor? = null
     private var offerAgent: OfferAgent? = null
     private var interviewAgent: MockInterviewAgent? = null
+    /** Постоянный MCP-гейтвей для оркестратора (Фаза 2): инструменты интервьюеру/ассистенту. */
+    private var agentTools: ToolGateway? = null
 
     // --- пробное собеседование (side-сессия; НЕ меняет состояние задачи) ---
     var interviewOpen by mutableStateOf(false)
@@ -453,7 +455,10 @@ class ChatState(
         mcpPingResult = null
         mcpVisaResult = null
         scope.launch {
-            val gateway = toolGatewayFactory(resolveLlmConfig(Models.byId("deepseek-chat"), config)?.apiKey)
+            val gateway = toolGatewayFactory(
+                resolveLlmConfig(Models.byId("deepseek-chat"), config)?.apiKey,
+                config.mcpRemoteUrl.ifBlank { null }, config.mcpRemoteToken.ifBlank { null },
+            )
             mcpGateway = gateway
             runCatching {
                 gateway.connect()
@@ -788,6 +793,7 @@ class ChatState(
         client?.close()
         extractorClient?.close()
         mcpGateway?.let { g -> scope.launch { runCatching { g.close() } } }
+        agentTools?.let { g -> scope.launch { runCatching { g.close() } } }
     }
 
     private fun rebuildAgent() {
@@ -800,10 +806,18 @@ class ChatState(
         val guard = extractorClient?.let { InvariantGuard(it) }
         offerAgent = extractorClient?.let { OfferAgent(it) }
 
+        // MCP-инструменты для оркестратора (Фаза 2): постоянный гейтвей, лениво подключается при первом вызове.
+        // День 18: если задан удалённый MCP (VPS) — агент ходит за инструментами туда (SSE+токен), иначе локально.
+        agentTools?.let { old -> scope.launch { runCatching { old.close() } } }
+        agentTools = toolGatewayFactory(
+            extractorLlm?.apiKey,
+            config.mcpRemoteUrl.ifBlank { null }, config.mcpRemoteToken.ifBlank { null },
+        )
+
         val llm = resolveLlmConfig(model, config)
         client = llm?.let { LlmClient(it) }
         agent = client?.let { VisaAgent(it, guard) }
-        orchestrator = client?.let { TaskOrchestrator(it, guard).apply { invariants = this@ChatState.invariants } }
+        orchestrator = client?.let { TaskOrchestrator(it, guard, tools = agentTools).apply { invariants = this@ChatState.invariants } }
         interviewAgent = client?.let { MockInterviewAgent(it) }
     }
 
