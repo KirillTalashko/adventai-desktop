@@ -605,24 +605,32 @@ private fun McpToolsDialog(state: ChatState) {
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(
-                                    if (state.mcpIsRemote) "🟢 Удалённый MCP-сервер · развёрнут, работает 24/7"
-                                    else "🟢 Локальный MCP-сервер (подпроцесс)",
-                                    color = AppColors.accent, fontWeight = FontWeight.SemiBold
-                                )
-                                Text(state.mcpServerUrl, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(
-                                    "Инструменты ниже получены С СЕРВЕРА: ${state.mcpTools.size}",
-                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                if (state.extraMcpEnabled) {
-                                    val counts = state.mcpTools.groupingBy {
-                                        Regex("^\\[(.+?)]").find(it.description.orEmpty())?.groupValues?.get(1) ?: "(без метки)"
-                                    }.eachCount()
-                                    Text("🔌 Серверов подключено: ${counts.size}", style = MaterialTheme.typography.bodySmall, color = AppColors.accent, fontWeight = FontWeight.SemiBold)
-                                    counts.forEach { (srv, n) ->
+                                // Реально подключённые серверы — по меткам [server] в описаниях (их ставит McpRouter).
+                                val byServer = state.mcpTools.groupingBy {
+                                    Regex("^\\[(.+?)]").find(it.description.orEmpty())?.groupValues?.get(1) ?: ""
+                                }.eachCount().filterKeys { it.isNotEmpty() }
+                                if (state.extraMcpEnabled && byServer.isNotEmpty()) {
+                                    Text("🟢 Подключено MCP-серверов: ${byServer.size}", color = AppColors.accent, fontWeight = FontWeight.SemiBold)
+                                    byServer.forEach { (srv, n) ->
                                         Text("• $srv — тулзов: $n", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
+                                    if (state.mcpEnabled && !byServer.containsKey("visa-info")) {
+                                        Text(
+                                            "⚠️ visa-info (${state.mcpServerUrl}) не ответил — нет сети/DNS до VPS. Локальные серверы работают.",
+                                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                } else {
+                                    Text(
+                                        if (state.mcpIsRemote) "🟢 Удалённый MCP-сервер · развёрнут, работает 24/7"
+                                        else "🟢 Локальный MCP-сервер (подпроцесс)",
+                                        color = AppColors.accent, fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(state.mcpServerUrl, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(
+                                        "Инструменты ниже получены С СЕРВЕРА: ${state.mcpTools.size}",
+                                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
                             }
                         }
