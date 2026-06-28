@@ -3,8 +3,20 @@ package com.example.adventdesktop.domain
 /** Расход токенов (из ответа API). */
 data class TokenUsage(val prompt: Int, val completion: Int, val total: Int)
 
-/** Ответ шлюза к LLM. [toolCalls] — след вызванных инструментов (для показа в UI), если были. */
-data class GatewayResponse(val text: String, val usage: TokenUsage?, val toolCalls: List<String> = emptyList())
+/** Один исполненный вызов инструмента в tool-loop: имя, аргументы (JSON) и текстовый результат. */
+data class ToolResult(val name: String, val args: String, val result: String)
+
+/**
+ * Ответ шлюза к LLM. [toolCalls] — след вызванных инструментов (для показа в UI), если были.
+ * [toolResults] — те же вызовы С их результатами (День 19): нужны, чтобы переиспользовать тяжёлый
+ * синтез `get_visa_requirements` (актуальные данные + официальные ссылки), а не звать инструмент заново.
+ */
+data class GatewayResponse(
+    val text: String,
+    val usage: TokenUsage?,
+    val toolCalls: List<String> = emptyList(),
+    val toolResults: List<ToolResult> = emptyList(),
+)
 
 /**
  * Порт к LLM — доменный слой не знает про HTTP/Ktor (Clean Architecture).

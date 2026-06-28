@@ -36,7 +36,8 @@ data class TaskContext(
     val interviewOffered: Boolean = false,    // пробное собеседование уже предлагали (не повторять)
     val paused: Boolean = false,
     val caseFile: CaseFile = CaseFile(),      // День 18 «оркестр»: структурное досье — источник фактов всех стадий
-    val pivotTo: String = ""                  // ждём подтверждения разворота на эту страну (пусто = нет)
+    val pivotTo: String = "",                 // ждём подтверждения разворота на эту страну (пусто = нет)
+    val research: String = ""                 // День 19: синтез get_visa_requirements (актуальные данные + ОФИЦ. ССЫЛКИ) — один раз на кейс, цитируется всеми стадиями
 ) {
     val total: Int get() = plan.size
     val current: String get() = plan.getOrNull(step).orEmpty()
@@ -64,6 +65,11 @@ data class TaskContext(
         append("Задача: ").append(task).append('\n')
         val dossier = caseFile.renderBlock()
         if (dossier.isNotEmpty()) append(dossier).append('\n')
+        if (research.isNotBlank()) {
+            append("[СПРАВКА ПО ВИЗЕ — актуальные данные и ОФИЦИАЛЬНЫЕ ССЫЛКИ из инструмента get_visa_requirements; ")
+            append("ЕДИНСТВЕННЫЙ источник конкретики: документы, сборы, сроки, куда подавать. ОБЯЗАТЕЛЬНО цитируй эти URL и дату]\n")
+            append(research).append("\n[/СПРАВКА]\n")
+        }
         if (approach.isNotBlank()) append("Выбранный подход: ").append(approach).append('\n')
         append("Этап: ").append(state.name)
         if (state == TaskState.EXECUTION && total > 0) append(" (шаг ").append(step + 1).append(" из ").append(total).append(')')

@@ -67,7 +67,8 @@ internal data class TaskContextDto(
     val interviewOffered: Boolean = false,
     val paused: Boolean = false,
     val caseFile: CaseFileDto = CaseFileDto(),
-    val pivotTo: String = ""
+    val pivotTo: String = "",
+    val research: String = ""
 )
 
 @Serializable
@@ -135,14 +136,14 @@ internal fun TaskContextDto.toDomain() = TaskContext(
     prompt = prompt, options = options, approach = approach,
     plan = plan, step = step, done = done, docs = docs, pending = pending, note = note, revises = revises,
     offer = offer, interviewOffered = interviewOffered, paused = paused,
-    caseFile = caseFile.toDomain(), pivotTo = pivotTo
+    caseFile = caseFile.toDomain(), pivotTo = pivotTo, research = research
 )
 
 internal fun TaskContext.toDto() = TaskContextDto(
     task = task, state = state.name, awaiting = awaiting.name, prompt = prompt, options = options,
     approach = approach, plan = plan, step = step, done = done, docs = docs, pending = pending, note = note,
     revises = revises, offer = offer, interviewOffered = interviewOffered, paused = paused,
-    caseFile = caseFile.toDto(), pivotTo = pivotTo
+    caseFile = caseFile.toDto(), pivotTo = pivotTo, research = research
 )
 
 internal fun ConversationDto.toDomain(): Conversation =

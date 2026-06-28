@@ -53,6 +53,26 @@ data class UserProfile(
     }
 
     /**
+     * Гражданство из свободного [about] — допустимый засев в [CaseFile.citizenship] на INTAKE, когда
+     * пользователь не назвал его в самом диалоге. Гражданство — УСТОЙЧИВЫЙ признак личности (в отличие
+     * от страны/дат ПОЕЗДКИ, для которых анти-бленд профиля сохраняется), поэтому профиль здесь —
+     * легитимный источник. Распознаёт «гражданин/гражданство РФ/России», «российское гражданство»,
+     * «гражданин <Страна>», «citizen of <Country>». Пусто — не нашли (тогда спросит интервьюер).
+     */
+    fun citizenship(): String {
+        if (about.isBlank()) return ""
+        val low = about.lowercase()
+        // Доминирующая форма РФ (склонения учтены через \p{L}*, т.к. \w в Java по умолчанию ASCII-only).
+        if (Regex("гражд\\p{L}*\\s+(?:рф|росси\\p{L}*)|росси\\p{L}*\\s+гражд\\p{L}*").containsMatchIn(low)) return "РФ"
+        // Обобщённо: «гражданин/гражданка/гражданство <Страна>» (берём как назвал пользователь).
+        Regex("(?:гражданин|гражданка|гражданство)\\s+([\\p{L}-]+)", RegexOption.IGNORE_CASE).find(about)
+            ?.groupValues?.get(1)?.trim()?.takeIf { it.length >= 3 && it.lowercase() !in NON_COUNTRY }?.let { return it }
+        Regex("citizen(?:ship)?\\s+of\\s+([\\p{L}-]+)", RegexOption.IGNORE_CASE).find(about)
+            ?.groupValues?.get(1)?.trim()?.takeIf { it.length >= 3 }?.let { return it }
+        return ""
+    }
+
+    /**
      * Факты о пользователе из профиля (ЧТО известно: имя, описание) — для разового засева в
      * долговременную память при онбординге. Стиль (длина/тон/формат/язык) сюда НЕ входит: это «КАК
      * отвечать» и живёт только в [toPromptBlock]. Каждый факт — одна строка (склеиваем многострочный
@@ -62,5 +82,10 @@ data class UserProfile(
         if (name.isNotBlank()) add("Имя: ${name.trim()}")
         val aboutLine = about.lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString(" ")
         if (aboutLine.isNotEmpty()) add(aboutLine)
+    }
+
+    private companion object {
+        /** Слова после «гражданство…», которые НЕ являются страной (защита обобщённого матча от мусора). */
+        val NON_COUNTRY = setOf("есть", "нету", "нет", "оформлено", "оформляю", "имеется", "второе", "двойное")
     }
 }

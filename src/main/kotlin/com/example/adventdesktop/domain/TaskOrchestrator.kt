@@ -42,19 +42,69 @@ class TaskOrchestrator(
             val q = "Вы переключаетесь на «$to»? Это новый кейс — ответьте «да», и я начну заново (текущий план сбросится), или «нет», чтобы продолжить текущий."
             return@runCatching TaskStep(AgentReply(q, null), ctx0.copy(awaiting = Awaiting.ANSWER, prompt = q, pivotTo = to))
         }
-        val ctx = ctx0.copy(caseFile = updatedCase)
+        // Гражданство — устойчивый признак личности: если пользователь не назвал его в диалоге, засеваем из
+        // профиля (анти-бленд для фактов ПОЕЗДКИ — страна/даты/цель — сохраняется: их из профиля не берём).
+        val seededCase = seedCitizenship(updatedCase, profile)
+        val ctx = ctx0.copy(caseFile = seededCase)
 
         // 2) Интервьюер ВЕДЁТ разговор, видя актуальное [ДОСЬЕ]; классифицирует и спрашивает недостающее.
         val resp = call(INTERVIEWER, ctx, history, profile, INTAKE_INSTRUCTION, guarded = true, useTools = true)
         val shown = withTrace(resp, ctx.docs)
         if (hasTag(resp.text, "SIMPLE")) return@runCatching TaskStep(AgentReply(shown, resp.usage), ctx0, cancel = true)
 
+        // День 19: если интервьюер уже вызвал get_visa_requirements — переиспользуем его синтез (актуальные
+        // данные + ОФИЦ. ссылки), кладём в [research], чтобы цитировали все стадии без повторного платного вызова.
+        val ctxR = captureResearch(ctx, resp)
+
         // 3) Готовность к плану решает КОД по досье (а не флака-тег).
-        if (updatedCase.isReadyForPlan) {
-            TaskStep(AgentReply(shown, resp.usage), ctx.copy(awaiting = Awaiting.NONE, prompt = "").transitionTo(TaskState.PLANNING))
+        if (seededCase.isReadyForPlan) {
+            TaskStep(AgentReply(shown, resp.usage), ctxR.copy(awaiting = Awaiting.NONE, prompt = "").transitionTo(TaskState.PLANNING))
         } else {
-            TaskStep(AgentReply(shown, resp.usage), ctx.copy(awaiting = Awaiting.ANSWER, prompt = clean(resp.text)))
+            TaskStep(AgentReply(shown, resp.usage), ctxR.copy(awaiting = Awaiting.ANSWER, prompt = clean(resp.text)))
         }
+    }
+
+    /** День 19: достать синтез get_visa_requirements из tool-loop и сохранить в [TaskContext.research] (один раз). */
+    private fun captureResearch(ctx: TaskContext, resp: GatewayResponse): TaskContext {
+        if (ctx.research.isNotBlank()) return ctx
+        val r = resp.toolResults.lastOrNull { isUsableResearch(it.name, it.result) } ?: return ctx
+        return ctx.copy(research = capResearch(r.result))
+    }
+
+    /**
+     * Фолбэк-ресёрч: если [research] ещё пуст, а инструмент и ключевые факты (страна+гражданство) есть — ОДИН раз
+     * детерминированно зовём get_visa_requirements и сохраняем синтез (со ссылками) для всех стадий плана/выполнения.
+     */
+    private suspend fun ensureResearch(ctx: TaskContext): TaskContext {
+        if (ctx.research.isNotBlank()) return ctx
+        val gw = tools ?: return ctx
+        val cf = ctx.caseFile
+        if (cf.destination.isBlank() || cf.citizenship.isBlank()) return ctx
+        val args = buildString {
+            append("{\"destination\":").append(jsonStr(cf.destination))
+            append(",\"citizenship\":").append(jsonStr(cf.citizenship))
+            if (cf.purpose.isNotBlank()) append(",\"purpose\":").append(jsonStr(cf.purpose))
+            append("}")
+        }
+        val result = runCatching { gw.callToolJson("get_visa_requirements", args) }.getOrNull()
+        return if (result != null && isUsableResearch("get_visa_requirements", result)) ctx.copy(research = capResearch(result)) else ctx
+    }
+
+    private fun isUsableResearch(name: String, result: String): Boolean =
+        name == "get_visa_requirements" && result.isNotBlank() && !result.startsWith("Ошибка инструмента")
+
+    private fun capResearch(s: String): String {
+        val t = s.trim()
+        return if (t.length <= RESEARCH_CAP) t else t.take(RESEARCH_CAP) + "\n… (сводка усечена; полные данные — по ссылкам выше)"
+    }
+
+    private fun jsonStr(s: String): String = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ") + "\""
+
+    /** Засев гражданства из профиля, если оно не названо в диалоге (см. [UserProfile.citizenship]). */
+    private fun seedCitizenship(case: CaseFile, profile: UserProfile?): CaseFile {
+        if (case.citizenship.isNotBlank()) return case
+        val fromProfile = profile?.citizenship().orEmpty()
+        return if (fromProfile.isNotBlank()) case.copy(citizenship = fromProfile) else case
     }
 
     /** Подтверждение разворота: «да» → новый кейс под [TaskContext.pivotTo]; «нет» → прежний кейс. */
@@ -76,7 +126,8 @@ class TaskOrchestrator(
     }
 
     /** PLANNING (1/2): планировщик предлагает 4 подхода → выбор пользователя ([Awaiting.CHOICE]). */
-    suspend fun proposeOptions(ctx: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatching {
+    suspend fun proposeOptions(ctx0: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatching {
+        val ctx = ensureResearch(ctx0)   // справка (актуальные данные + ссылки) — один раз, перед планированием
         val resp = call(PLANNER_OPTIONS, ctx, history, profile, "Предложи 4 разных подхода. Верни блок [OPTIONS]…[/OPTIONS].")
         val options = parseList(resp.text, "OPTIONS")
         val next = if (options.size < 2) ctx   // не распознано — остаёмся, можно повторить
@@ -85,7 +136,8 @@ class TaskOrchestrator(
     }
 
     /** PLANNING (2/2): построить план под выбранный подход (`ctx.approach`) → чекпоинт плана → EXECUTION. */
-    suspend fun buildPlan(ctx: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatching {
+    suspend fun buildPlan(ctx0: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatching {
+        val ctx = ensureResearch(ctx0)
         val resp = call(PLANNER_PLAN, ctx, history, profile, "Построй пошаговый план под выбранный подход. Верни блок [PLAN]…[/PLAN].")
         val plan = parseList(resp.text, "PLAN")
         if (plan.isEmpty()) return@runCatching TaskStep(AgentReply(clean(resp.text), resp.usage), ctx.copy(awaiting = Awaiting.NONE))
@@ -109,13 +161,15 @@ class TaskOrchestrator(
         }
     }
 
-    private suspend fun execute(ctx: TaskContext, history: List<Message>, profile: UserProfile?): TaskStep {
+    private suspend fun execute(ctx0: TaskContext, history: List<Message>, profile: UserProfile?): TaskStep {
+        val ctx = ensureResearch(ctx0)   // [СПРАВКА] со ссылками должна быть в [STATE] и на выполнении (День 19)
         // Текущий шаг дублируем в инструкцию (высокая «свежесть») + режем историю, чтобы исполнитель не
         // шёл за инерцией прошлых шагов, а делал ИМЕННО текущий (#1).
         val instruction = "Выполни ИМЕННО шаг ${ctx.step + 1} из ${ctx.total}: «${ctx.current}». " +
-            "Не возвращайся к прошлым шагам и не забегай вперёд. Заверши строкой [STEP_RESULT] <что сделано по ЭТОМУ шагу>. " +
+            "Не возвращайся к прошлым шагам и не забегай вперёд. Используй [СПРАВКА ПО ВИЗЕ] и приводи официальные ССЫЛКИ. " +
+            "Заверши строкой [STEP_RESULT] <что сделано по ЭТОМУ шагу>. " +
             "Если нужен документ пользователя — добавь [NEED_DOC] <короткий ярлык, 2–4 слова>."
-        val resp = call(EXECUTOR, ctx, history, profile, instruction, historyLimit = 6, guarded = true)
+        val resp = call(EXECUTOR, ctx, history, profile, instruction, historyLimit = 6, guarded = true, useTools = true)
         val needDoc = parseTagged(resp.text, "NEED_DOC")
         val result = parseTagged(resp.text, "STEP_RESULT") ?: "шаг ${ctx.step + 1} выполнен"
         // Документы НЕ блокируют: нужный файл уходит в «понадобится позже», шаг всегда продвигается (#3, #4).
@@ -124,7 +178,7 @@ class TaskOrchestrator(
             pending = addPending(ctx.pending, needDoc), step = ctx.step + 1, awaiting = Awaiting.NONE, prompt = ""
         )
         val next = if (advanced.total > 0 && advanced.step >= advanced.total) advanced.transitionTo(TaskState.VALIDATION) else advanced
-        return TaskStep(AgentReply(reconcileChecklist(clean(resp.text), ctx.docs), resp.usage), next)
+        return TaskStep(AgentReply(withTrace(resp, ctx.docs), resp.usage), next)
     }
 
     /** Аккуратно добавить документ в «понадобится позже»: короткий ярлык, без дублей и без раздувания (#4). */
@@ -285,7 +339,7 @@ class TaskOrchestrator(
             .replace(Regex("\\[PLAN][\\s\\S]*?(?:\\[/PLAN]|\\z)", setOf(RegexOption.IGNORE_CASE)), "")
             .replace(Regex("\\[CASE][\\s\\S]*?(?:\\[/CASE]|\\z)", setOf(RegexOption.IGNORE_CASE)), "")
             // Защита: если в прозу просочились служебные маркеры — убрать их (не блоки, а отдельные токены).
-            .replace(Regex("\\[/?(ДОСЬЕ|STATE)]", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("\\[/?(ДОСЬЕ|STATE|СПРАВКА)]", RegexOption.IGNORE_CASE), "")
         t = t.lineSequence().filterNot { line ->
             val u = line.trim()
             CONTROL_TAGS.any { u.startsWith(it, ignoreCase = true) }
@@ -297,6 +351,9 @@ class TaskOrchestrator(
         /** Максимум возвратов валидатора на доработку (защита от петли revise). */
         const val MAX_REVISES = 1
 
+        /** Предел длины сохраняемого синтеза [TaskContext.research] в [STATE] (баланс «ссылки сохранены / токены»). */
+        const val RESEARCH_CAP = 3500
+
         val CONTROL_TAGS = listOf("[SIMPLE]", "[READY]", "[ASK]", "[NEED_DOC]", "[STEP_RESULT]", "[VERDICT]", "[PIVOT]")
 
         /** Слова подтверждения/отказа разворота (разбор «да/нет» кодом). */
@@ -306,9 +363,12 @@ class TaskOrchestrator(
         /** Дирижёрский преамбул — единые правила для ВСЕХ ролей оркестра (инжектится перед ролью). */
         const val CONDUCTOR = "[ОРКЕСТР — общие правила для всех ролей]\n" +
             "• ЕДИНСТВЕННЫЙ источник фактов кейса — блок [ДОСЬЕ] в [STATE]. Не выдумывай факты и не бери их из профиля/фона как данность.\n" +
-            "• Не показывай пользователю служебное: управляющие теги, слова «инвариант», «[STATE]», «[ДОСЬЕ]». Если " +
+            "• Не показывай пользователю служебное: управляющие теги, слова «инвариант», «[STATE]», «[ДОСЬЕ]», «[СПРАВКА]». Если " +
             "перечисляешь, что уже знаешь о кейсе — говори «как я понял»/«по вашим данным», а НЕ «досье»/«в досье». Пиши как живой консультант.\n" +
-            "• Конкретику (цены, сборы, адреса, точные даты) бери из инструмента или [ДОСЬЕ]; чего нет — общими словами + «уточните на официальном сайте».\n" +
+            "• Конкретику (документы, сборы, сроки, куда подавать) И ОФИЦИАЛЬНЫЕ ССЫЛКИ бери из [СПРАВКА ПО ВИЗЕ] и [ДОСЬЕ]. " +
+            "Когда даёшь требования/сборы/сроки — ОБЯЗАТЕЛЬНО приводи конкретные официальные URL и дату из [СПРАВКА] (живые ссылки). " +
+            "«Уточните на официальном сайте» БЕЗ ссылки — это не ответ; общими словами говори ТОЛЬКО если нужного нет ни в [СПРАВКА], ни у инструмента.\n" +
+            "• Ты — живой визовый эксперт: отвечай содержательно и по делу, без сухих отписок и канцелярита.\n" +
             "• Делай ТОЛЬКО свою роль и передавай управление положенным сигналом; работу других стадий не выполняй."
 
         /** Инструкции стадий, вынесенные в const (часто используются / делят формулировки). */
@@ -342,8 +402,8 @@ class TaskOrchestrator(
             "сводку/список) — вызови нужный инструмент (get_visa_requirements / add_digest_country / list_digest_countries / " +
             "get_visa_digest), дай полный ответ (источник+дата), заверши [SIMPLE]. План не нужен.\n" +
             "ИНАЧЕ это ВЕДЕНИЕ КЕЙСА — система уже обновила [ДОСЬЕ] в [STATE] из слов пользователя; работай по нему:\n" +
-            "1) Если в досье есть страна+гражданство — вызови get_visa_requirements и кратко покажи ключевые требования " +
-            "(источник+дата).\n" +
+            "1) Если в досье есть страна+гражданство — вызови get_visa_requirements и кратко покажи ключевые требования, " +
+            "СОХРАНИВ конкретные официальные ССЫЛКИ (URL) и дату из ответа — не заменяй их словами «официальные сайты».\n" +
             "2) Минимум для плана: страна, гражданство, цель, ОРИЕНТИР по датам; для работы/учёбы — ещё занятость/" +
             "квалификация (оффер, диплом). Глянь [ДОСЬЕ]: чего из ЭТОГО НЕТ — задай 1–2 КОРОТКИХ точечных вопроса именно " +
             "про недостающее (особенно даты: «на какие даты/месяц ориентируетесь?»). Что уже в досье — НЕ переспрашивай. " +
@@ -361,7 +421,8 @@ class TaskOrchestrator(
 
         const val PLANNER_PLAN = "Ты — ПЛАНИРОВЩИК. Этап PLANNING, построение плана.\n" +
             "Построй пошаговый план (4–7 шагов) КОНКРЕТНЫХ действий по решению ЗАДАЧИ из [ДОСЬЕ]/[STATE] (документы, сроки, " +
-            "запись, подача) под «Выбранный подход». УЧИТЫВАЙ факты досье: даты поездки (дедлайны подачи), число заявителей " +
+            "запись, подача) под «Выбранный подход». Опирайся на [СПРАВКА ПО ВИЗЕ] (актуальные требования, сроки, сборы) — " +
+            "шаги должны ей соответствовать. УЧИТЫВАЙ факты досье: даты поездки (дедлайны подачи), число заявителей " +
             "и детей (их документы), занятость/доход (фин. гарантии), прошлые отказы (стратегия), город (куда подавать). " +
             "Каждый шаг — одна строка, глагол в начале, по порядку.\n" +
             "ВАЖНО: план — про саму ЗАДАЧУ, а НЕ про процесс. НИКОГДА не вставляй мета-шаги вроде «выберите подход», " +
@@ -375,9 +436,12 @@ class TaskOrchestrator(
             "конкретный результат (документы, требования, сроки, инструкции; пакет документов — блоком [checklist]). " +
             "Факты кейса (страна, гражданство, даты, кто едет, занятость) бери из [ДОСЬЕ]. " +
             "Учитывай «Документы», «Ожидают загрузки», «Замечания валидатора».\n" +
-            "ТОЧНОСТЬ: конкретные адреса визовых центров, цены, телефоны и точные даты часто меняются — НЕ приводи их " +
-            "как факт по памяти. Если их нет в [STATE]/из инструмента — говори общими словами («ближайший визовый центр " +
-            "в вашем городе», «актуальный консульский сбор») и добавляй «уточните на официальном сайте».\n" +
+            "ИСТОЧНИКИ И ССЫЛКИ (главное): конкретику по шагу — перечень документов, сборы, сроки, КУДА и КАК подавать — " +
+            "бери из [СПРАВКА ПО ВИЗЕ] в [STATE] и ОБЯЗАТЕЛЬНО приводи официальные URL и дату оттуда (живые ссылки, а не " +
+            "отписка «уточните на сайте»). Если для ИМЕННО этого шага нужной конкретики в [СПРАВКА] нет — ВЫЗОВИ инструмент " +
+            "get_visa_requirements (или другой подходящий) и возьми данные с его ссылками. НЕ выдумывай адреса/цены/телефоны " +
+            "по памяти, но и НЕ отделывайся общими словами, если факт можно взять из справки или у инструмента. Хеджируй " +
+            "(«уточните на официальном сайте» без ссылки) ТОЛЬКО то, чего реально нет ни в справке, ни у инструмента.\n" +
             "ДАТА ПОЕЗДКИ: НЕ выдумывай её и не превращай намёк из фона («октябрь») в конкретное число («1 октября»). " +
             "Если точной даты нет в [STATE] — считай сроки ОТНОСИТЕЛЬНО («подача за 15 рабочих дней до поездки») и попроси " +
             "пользователя назвать даты, а не подставляй своё число.\n" +

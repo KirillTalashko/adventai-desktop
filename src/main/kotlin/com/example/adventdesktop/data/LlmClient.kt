@@ -5,6 +5,7 @@ import com.example.adventdesktop.domain.LlmGateway
 import com.example.adventdesktop.domain.Message
 import com.example.adventdesktop.domain.TokenUsage
 import com.example.adventdesktop.domain.Tool
+import com.example.adventdesktop.domain.ToolResult
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.cio.CIO
@@ -95,6 +96,7 @@ class LlmClient(private val config: LlmConfig) : LlmGateway {
         val toolDefs = tools.takeIf { it.isNotEmpty() }?.map(::toToolDef)
         var pTok = 0; var cTok = 0; var tTok = 0
         val trace = mutableListOf<String>()
+        val results = mutableListOf<ToolResult>()
 
         repeat(MAX_TOOL_ROUNDS) {
             val parsed = send(wire, toolDefs)
@@ -107,7 +109,7 @@ class LlmClient(private val config: LlmConfig) : LlmGateway {
                 if (text.isEmpty()) {
                     throw IllegalStateException("Модель вернула пустой ответ (возможно, временный лимит). Смените модель или повторите.")
                 }
-                return GatewayResponse(text, TokenUsage(pTok, cTok, tTok), trace)
+                return GatewayResponse(text, TokenUsage(pTok, cTok, tTok), trace, results)
             }
 
             // Модель попросила инструмент(ы): добавляем её ход + результаты вызовов и продолжаем цикл.
@@ -116,6 +118,7 @@ class LlmClient(private val config: LlmConfig) : LlmGateway {
                 val result = runCatching { executeTool(c.function.name, c.function.arguments) }
                     .getOrElse { "Ошибка инструмента ${c.function.name}: ${it.message}" }
                 trace.add("${c.function.name}(${c.function.arguments})")
+                results.add(ToolResult(c.function.name, c.function.arguments, result))
                 wire.add(WireMessage(role = "tool", content = result, tool_call_id = c.id))
             }
         }
@@ -125,7 +128,7 @@ class LlmClient(private val config: LlmConfig) : LlmGateway {
         finalResp.usage?.let { pTok += it.prompt_tokens; cTok += it.completion_tokens; tTok += it.total_tokens }
         val text = finalResp.choices.firstOrNull()?.message?.content?.trim()
             ?.ifEmpty { null } ?: "Не удалось получить финальный ответ после вызова инструментов."
-        return GatewayResponse(text, TokenUsage(pTok, cTok, tTok), trace)
+        return GatewayResponse(text, TokenUsage(pTok, cTok, tTok), trace, results)
     }
 
     /** Один HTTP-запрос chat/completions (с опциональными tool-схемами). */
