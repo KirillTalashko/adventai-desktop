@@ -73,6 +73,20 @@ tasks.register<ShadowJar>("mcpServerJar") {
     isZip64 = true           // в classpath есть крупные зависимости (compose/skiko)
 }
 
+// День 20: standalone CLI «Визового специалиста» (Skill + CLI). Запуск: java -jar visa-cli.jar <команда>.
+tasks.register<ShadowJar>("visaCliJar") {
+    group = "build"
+    description = "Fat-jar локального CLI (День 20, Skill + CLI)"
+    archiveBaseName.set("visa-cli")
+    archiveClassifier.set("all")
+    archiveVersion.set("")
+    from(sourceSets["main"].output)
+    configurations = listOf(project.configurations.runtimeClasspath.get())
+    manifest { attributes["Main-Class"] = "com.example.adventdesktop.cli.VisaCliMainKt" }
+    mergeServiceFiles()
+    isZip64 = true
+}
+
 compose.desktop {
     application {
         mainClass = "com.example.adventdesktop.MainKt"

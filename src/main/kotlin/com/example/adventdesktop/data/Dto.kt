@@ -106,6 +106,10 @@ internal data class AppConfigDto(
     val modelId: String = "",
     val mcpRemoteUrl: String = "",
     val mcpRemoteToken: String = "",
+    // День 20: переключатели коннекторов агента (MCP vs локальный Skill+CLI).
+    val mcpEnabled: Boolean = true,
+    val skillDocsEnabled: Boolean = false,
+    val skillPromptTuneEnabled: Boolean = false,
 )
 
 // --- мапперы DTO <-> domain ---

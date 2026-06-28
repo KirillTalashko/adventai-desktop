@@ -55,6 +55,16 @@ interface ToolGateway {
     suspend fun close()
 }
 
+/**
+ * Порт к локальному **Skill + CLI** (День 20) — альтернатива MCP. Домен знает лишь «выполни команду нашего
+ * CLI и верни текст»; запуск процесса/безопасность — в `data`. Грузится по требованию (idle = 0), в отличие
+ * от MCP-схем, которые идут в каждый sampling call.
+ */
+interface SkillRunner {
+    /** Выполнить команду вида «visa-cli <subcommand> [args]»; вернуть stdout (или текст ошибки). */
+    suspend fun run(command: String): String
+}
+
 /** Хранилище диалогов (персист между сессиями). */
 interface ConversationRepository {
     fun listMetas(): List<ConversationMeta>
