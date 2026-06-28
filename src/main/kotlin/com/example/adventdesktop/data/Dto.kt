@@ -110,6 +110,8 @@ internal data class AppConfigDto(
     val mcpEnabled: Boolean = true,
     val skillDocsEnabled: Boolean = false,
     val skillPromptTuneEnabled: Boolean = false,
+    // День 20: подключить СТОРОННЕЕ MCP (npx @modelcontextprotocol/server-everything) через маршрутизатор.
+    val extraMcpEnabled: Boolean = false,
 )
 
 // --- мапперы DTO <-> domain ---

@@ -14,6 +14,8 @@ data class DesktopConfig(
     val mcpEnabled: Boolean = true,
     val skillDocsEnabled: Boolean = false,
     val skillPromptTuneEnabled: Boolean = false,
+    // День 20: подключить СТОРОННЕЕ MCP (server-everything через npx) — второй сервер в маршрутизаторе.
+    val extraMcpEnabled: Boolean = false,
 ) {
     fun keyFor(provider: String): String = if (provider == "deepseek") deepseekKey else openrouterKey
 }
@@ -41,6 +43,7 @@ class ConfigStore(private val store: FileStore) {
             mcpEnabled = dto.mcpEnabled,
             skillDocsEnabled = dto.skillDocsEnabled,
             skillPromptTuneEnabled = dto.skillPromptTuneEnabled,
+            extraMcpEnabled = dto.extraMcpEnabled,
         )
     }
 
@@ -57,6 +60,7 @@ class ConfigStore(private val store: FileStore) {
                     mcpEnabled = config.mcpEnabled,
                     skillDocsEnabled = config.skillDocsEnabled,
                     skillPromptTuneEnabled = config.skillPromptTuneEnabled,
+                    extraMcpEnabled = config.extraMcpEnabled,
                 )
             )
         )

@@ -13,6 +13,7 @@ import com.example.adventdesktop.data.AccountStore
 import com.example.adventdesktop.data.ConfigStore
 import com.example.adventdesktop.data.FileStore
 import com.example.adventdesktop.data.McpClient
+import com.example.adventdesktop.data.McpRouter
 import com.example.adventdesktop.data.appHomeDir
 import com.example.adventdesktop.ui.App
 import com.example.adventdesktop.ui.ChatState
@@ -29,6 +30,16 @@ fun main() = application {
     }
 }
 
+/**
+ * День 20: команда запуска стороннего MCP — референс-сервер `@modelcontextprotocol/server-everything` через
+ * npx (stdio). На Windows npx — это `npx.cmd`, поэтому зовём через `cmd /c`.
+ */
+private fun everythingCmd(): List<String> {
+    val base = listOf("npx", "-y", "@modelcontextprotocol/server-everything")
+    return if (System.getProperty("os.name").orEmpty().startsWith("Windows", ignoreCase = true))
+        listOf("cmd.exe", "/c") + base else base
+}
+
 /** Composition root: собираем зависимости вручную (KISS). */
 @Composable
 private fun rememberAppState(): ChatState {
@@ -39,9 +50,12 @@ private fun rememberAppState(): ChatState {
             accounts = AccountStore(store),
             configStore = ConfigStore(store),
             // День 18: задан URL удалённого MCP (VPS) → ходим туда по SSE+токен; иначе локальный подпроцесс.
-            toolGatewayFactory = { key, url, token ->
-                if (!url.isNullOrBlank()) McpClient(sseUrl = url, authToken = token)
+            // День 20: extraMcp=true → оборачиваем в McpRouter и добавляем СТОРОННЕЕ MCP (server-everything по stdio).
+            toolGatewayFactory = { key, url, token, extraMcp ->
+                val visa = if (!url.isNullOrBlank()) McpClient(sseUrl = url, authToken = token)
                 else McpClient(deepseekApiKey = key)
+                if (extraMcp) McpRouter(listOf("visa-info" to visa, "server-everything" to McpClient(stdioCommand = everythingCmd())))
+                else visa
             },
             scope = scope
         )

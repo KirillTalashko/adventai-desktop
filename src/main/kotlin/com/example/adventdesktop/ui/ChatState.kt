@@ -83,7 +83,7 @@ private const val PIPELINE_AGENT_PROMPT =
 class ChatState(
     private val accounts: AccountStore,
     private val configStore: ConfigStore,
-    private val toolGatewayFactory: (deepseekKey: String?, remoteUrl: String?, remoteToken: String?) -> ToolGateway,
+    private val toolGatewayFactory: (deepseekKey: String?, remoteUrl: String?, remoteToken: String?, extraMcp: Boolean) -> ToolGateway,
     private val scope: CoroutineScope
 ) {
     // --- глобальное (общее для аккаунтов) ---
@@ -541,6 +541,7 @@ class ChatState(
             val gateway = toolGatewayFactory(
                 resolveLlmConfig(Models.byId("deepseek-chat"), config)?.apiKey,
                 config.mcpRemoteUrl.ifBlank { null }, config.mcpRemoteToken.ifBlank { null },
+                config.extraMcpEnabled,
             )
             mcpGateway = gateway
             runCatching {
@@ -671,6 +672,7 @@ class ChatState(
     val mcpEnabled: Boolean get() = config.mcpEnabled
     val skillDocsEnabled: Boolean get() = config.skillDocsEnabled
     val skillPromptTuneEnabled: Boolean get() = config.skillPromptTuneEnabled
+    val extraMcpEnabled: Boolean get() = config.extraMcpEnabled
 
     var connectorsOpen by mutableStateOf(false)
         private set
@@ -704,6 +706,13 @@ class ChatState(
         configStore.save(config)
     }
 
+    /** Переключатель СТОРОННЕГО MCP (server-everything): пересобираем агента — gateway станет маршрутизатором. */
+    fun setExtraMcpEnabled(value: Boolean) {
+        config = config.copy(extraMcpEnabled = value)
+        configStore.save(config)
+        rebuildAgent()
+    }
+
     /** Спросить агента ЧЕРЕЗ MCP (схемы тулзов грузятся в запрос → tool-loop). Для сравнения с навыком. */
     fun askViaMcp() {
         val llm = client ?: run { error = noKeyError(); return }
@@ -715,6 +724,7 @@ class ChatState(
             val gw = agentTools ?: toolGatewayFactory(
                 resolveLlmConfig(Models.byId("deepseek-chat"), config)?.apiKey,
                 config.mcpRemoteUrl.ifBlank { null }, config.mcpRemoteToken.ifBlank { null },
+                config.extraMcpEnabled,
             )
             runCatching {
                 val tools = gw.listTools()
@@ -1099,6 +1109,7 @@ class ChatState(
         agentTools = if (config.mcpEnabled) toolGatewayFactory(
             extractorLlm?.apiKey,
             config.mcpRemoteUrl.ifBlank { null }, config.mcpRemoteToken.ifBlank { null },
+            config.extraMcpEnabled,
         ) else null
 
         val llm = resolveLlmConfig(model, config)
