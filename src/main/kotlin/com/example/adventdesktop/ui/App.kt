@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -555,7 +556,7 @@ private fun McpToolsDialog(state: ChatState) {
                                 "↓ ответ получен С СЕРВЕРА (живой запрос):",
                                 style = MaterialTheme.typography.labelSmall, color = AppColors.accent, fontWeight = FontWeight.SemiBold
                             )
-                            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                            ExpandableText(it)
                         }
 
                         // --- День 19: композиция MCP-инструментов (пайплайн) ---
@@ -606,10 +607,7 @@ private fun McpToolsDialog(state: ChatState) {
                                         step.title, fontWeight = FontWeight.SemiBold,
                                         style = MaterialTheme.typography.labelMedium, color = tint
                                     )
-                                    Text(
-                                        step.output.take(900),
-                                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface
-                                    )
+                                    ExpandableText(step.output, collapsedLines = 5)
                                 }
                             }
                         }
@@ -618,6 +616,37 @@ private fun McpToolsDialog(state: ChatState) {
             }
         }
     )
+}
+
+/**
+ * Длинный текст с кнопкой «Развернуть/Свернуть» (свёрнут — несколько строк) и возможностью выделить/скопировать.
+ * Состояние сбрасывается при смене текста (`remember(text)`). Используется для длинных ответов MCP/пайплайна.
+ */
+@Composable
+private fun ExpandableText(text: String, collapsedLines: Int = 6) {
+    var expanded by remember(text) { mutableStateOf(false) }
+    val isLong = text.length > 280 || text.count { it == '\n' } >= collapsedLines
+    SelectionContainer {
+        Text(
+            text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = if (expanded) Int.MAX_VALUE else collapsedLines,
+            overflow = if (expanded) TextOverflow.Clip else TextOverflow.Ellipsis,
+        )
+    }
+    if (isLong) {
+        TextButton(
+            onClick = { expanded = !expanded },
+            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
+        ) {
+            Text(
+                if (expanded) "Свернуть ▲" else "Развернуть весь ответ ▼",
+                style = MaterialTheme.typography.labelSmall,
+                color = AppColors.accent,
+            )
+        }
+    }
 }
 
 @Composable
