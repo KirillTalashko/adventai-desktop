@@ -105,6 +105,14 @@ class ChatState(
     private var skillRunner: SkillRunner? = null
     private var promptAnalyzer: PromptTuneAnalyzer? = null
     private var overrideStore: PromptOverrideStore? = null
+    // День 20 (prompt-tune): объявлено ВЫШЕ init — activate() трогает promptProposals на старте.
+    var promptTuneRunning by mutableStateOf(false)
+        private set
+    var promptTuneNote by mutableStateOf<String?>(null)
+        private set
+    var promptProposals by mutableStateOf<List<PromptProposal>>(emptyList())
+        private set
+    private var lastAnalyzedMs = 0L
 
     // --- пробное собеседование (side-сессия; НЕ меняет состояние задачи) ---
     var interviewOpen by mutableStateOf(false)
@@ -712,14 +720,7 @@ class ChatState(
     }
 
     // --- День 20: навык prompt-tune (самоулучшение промтов, человек в контуре) ---
-
-    var promptTuneRunning by mutableStateOf(false)
-        private set
-    var promptTuneNote by mutableStateOf<String?>(null)
-        private set
-    var promptProposals by mutableStateOf<List<PromptProposal>>(emptyList())
-        private set
-    private var lastAnalyzedMs = 0L
+    // (состояние promptTuneRunning/promptTuneNote/promptProposals объявлено выше — до init)
 
     /** Текущая персонализация ролей (одобренные добавки) — для показа и кнопки «Сбросить». */
     val personalization: List<PromptOverride> get() = overrideStore?.load().orEmpty()
