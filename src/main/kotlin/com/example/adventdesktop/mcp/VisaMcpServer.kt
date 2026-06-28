@@ -3,6 +3,8 @@ package com.example.adventdesktop.mcp
 import com.example.adventdesktop.data.LlmClient
 import com.example.adventdesktop.data.LlmConfig
 import com.example.adventdesktop.data.appHomeDir
+import com.example.adventdesktop.domain.Message
+import com.example.adventdesktop.domain.Role
 import com.example.adventdesktop.mcp.scheduler.DigestCountry
 import com.example.adventdesktop.mcp.scheduler.DigestScheduler
 import com.example.adventdesktop.mcp.scheduler.DigestStore
@@ -59,9 +61,9 @@ import java.time.LocalDate
  * MCP-сервер «Визовый специалист» (День 17) — самодостаточный умный сервис.
  *
  * Инструмент `get_visa_requirements(destination, citizenship, purpose)`:
- *  1) тянет ЖИВЬЁМ авторитетную сводку визовой политики страны (Wikipedia REST — реально доступен);
- *  2) подставляет ссылку на ОФИЦИАЛЬНЫЙ портал подачи из реестра (france-visas.gouv.fr и т.п. —
- *     их не скрейпим, они под Cloudflare/CAPTCHA, но цитируем как «куда подавать»);
+ *  1) тянет ЖИВЬЁМ авторитетную сводку визовой политики страны (поиск Tavily/DDG + Wikipedia-фолбэк);
+ *  2) портал подачи ИЩЕТ вживую (топ официального домена из поиска); захардкоженный реестр
+ *     [OFFICIAL_PORTAL] — лишь аварийный фолбэк, если поиск ничего официального не дал;
  *  3) внутренним LLM-агентом (DeepSeek) собирает структуру с датой актуальности и дисклеймером.
  *
  * Транспорт — stdio: в stdout идёт только JSON-RPC (логи заглушены slf4j-nop). Ключ DeepSeek берём из
@@ -79,7 +81,7 @@ import java.time.LocalDate
 @Serializable private data class WikiUrls(val desktop: WikiDesktop? = null)
 @Serializable private data class WikiDesktop(val page: String? = null)
 
-/** Русское имя → английское (для заголовка Wikipedia «Visa policy of …» и реестра порталов). */
+/** Русское имя → английское — БЫСТРЫЙ путь для частых стран; для остальных имя добывает LLM (resolveEnglishName). */
 private val RU_TO_EN = mapOf(
     "испания" to "Spain", "германия" to "Germany", "франция" to "France", "италия" to "Italy",
     "сша" to "the United States", "америка" to "the United States",
@@ -90,7 +92,10 @@ private val RU_TO_EN = mapOf(
     "португалия" to "Portugal", "чехия" to "the Czech Republic",
 )
 
-/** Английское имя (lowercase) → официальный портал подачи (цитируем, не скрейпим). */
+/**
+ * Английское имя (lowercase) → официальный портал подачи. ЭТО АВАРИЙНЫЙ ФОЛБЭК-РЕЕСТР: основной портал
+ * ищется вживую ([resolveLivePortal]); мапа используется, только если живой поиск не дал офиц. домена.
+ */
 private val OFFICIAL_PORTAL = mapOf(
     "spain" to "https://www.exteriores.gob.es/en/ServiciosAlCiudadano/Paginas/Visados.aspx",
     "france" to "https://france-visas.gouv.fr/",
@@ -130,7 +135,39 @@ private fun toEnglish(input: String): String {
     return input.trim().split(" ").joinToString(" ") { w -> w.replaceFirstChar { it.uppercase() } }
 }
 
+private const val EN_NAME_PROMPT =
+    "Верни общепринятое АНГЛИЙСКОЕ название страны для русского ввода. Только название (например «Spain», " +
+        "«the Netherlands», «the United States»), без пояснений, кавычек и точки. Если ввод — не страна, верни его как есть."
+
+/**
+ * Английское имя страны ДИНАМИЧЕСКИ: частые — из [RU_TO_EN] (быстро/бесплатно), остальные — у LLM (DeepSeek),
+ * фолбэк — капитализация ввода. Снимает лимит захардкоженного списка стран.
+ */
+private suspend fun resolveEnglishName(llm: LlmClient?, input: String): String {
+    RU_TO_EN[input.trim().lowercase()]?.let { return it }
+    if (llm != null) {
+        val en = runCatching {
+            llm.complete(listOf(Message(Role.System, EN_NAME_PROMPT), Message(Role.User, input.trim())))
+                .text.trim().lines().firstOrNull()?.trim()?.trim('.', '"', '«', '»', ' ')
+        }.getOrNull()
+        if (!en.isNullOrBlank() && en.length in 2..60) return en
+    }
+    return toEnglish(input)
+}
+
+/** Портал подачи ЖИВЬЁМ: верх официального домена из поиска. null → живой поиск не дал офиц. источника. */
+private suspend fun resolveLivePortal(http: HttpClient, enName: String, tavilyKey: String?): String? {
+    val q = "$enName official government visa application portal embassy consulate site"
+    val hits = runCatching { http.searchVisa(q, tavilyKey, limit = 6) }.getOrDefault(emptyList())
+    return hits.firstOrNull { it.official }?.url
+}
+
 private fun officialPortal(enName: String): String? = OFFICIAL_PORTAL[enName.lowercase()]
+
+/** Портал подачи: сначала живой поиск, иначе аварийный реестр, иначе подсказка «уточните». */
+private suspend fun resolvePortal(http: HttpClient, enName: String, tavilyKey: String?): String =
+    resolveLivePortal(http, enName, tavilyKey) ?: officialPortal(enName)
+        ?: "(уточните официальный визовый портал страны)"
 
 private fun createHttpClient(): HttpClient = HttpClient(CIO) {
     defaultRequest {
@@ -167,8 +204,8 @@ fun main(): Unit = runBlocking {
     // Сбор сводки по одной стране — тем же внутренним research-агентом, что и get_visa_requirements.
     val collect: suspend (DigestCountry) -> Pair<String, String>? = collect@{ c ->
         val agent = researchAgent ?: return@collect null
-        val enName = toEnglish(c.destination)
-        val portal = officialPortal(enName) ?: "(уточните официальный визовый портал страны)"
+        val enName = resolveEnglishName(llm, c.destination)
+        val portal = resolvePortal(httpClient, enName, tavilyKey)
         val summary = runCatching {
             agent.research(c.destination, enName, c.citizenship, c.purpose, portal, LocalDate.now().toString())
         }.getOrNull()
@@ -216,9 +253,9 @@ fun main(): Unit = runBlocking {
             return@addTool CallToolResult(content = listOf(TextContent("Параметр «destination» обязателен.")))
         }
 
-        val enName = toEnglish(destination)
+        val enName = resolveEnglishName(llm, destination)
         val today = LocalDate.now().toString()
-        val portal = officialPortal(enName) ?: "(уточните официальный визовый портал страны)"
+        val portal = resolvePortal(httpClient, enName, tavilyKey)
 
         // Полный цикл (поиск → парсинг → самокритика → дозапросы → синтез) — только с LLM.
         if (researchAgent != null) {
