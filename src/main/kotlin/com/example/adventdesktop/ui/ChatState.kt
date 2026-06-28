@@ -441,6 +441,33 @@ class ChatState(
         repo.save(updated)
         refreshList()
         if (ctx.awaiting == Awaiting.DOCUMENT) runStage { o, c, h, p -> o.step(c, h, p) }
+        else commentOnDocsViaSkill(saved)   // День 20: навык docs (если включён) реагирует на приложенный файл
+    }
+
+    /**
+     * День 20 — наглядность навыка: после приложения документа навык **docs** (Skill + CLI), если включён,
+     * САМ зовёт `visa-cli docs` и комментирует — что уже приложено и чего ещё не хватает по визе. Так видно,
+     * что скилл реагирует на загрузку файла (а не просто молчит).
+     */
+    private fun commentOnDocsViaSkill(justAdded: String) {
+        if (!config.skillDocsEnabled) return
+        val engine = skillEngine ?: return
+        val repo = conversations ?: return
+        scope.launch {
+            val conv = current ?: return@launch
+            val goal = "Пользователь только что приложил документ «$justAdded». Вызови visa-cli docs, посмотри все " +
+                "приложенные файлы аккаунта и кратко прокомментируй: какие документы уже есть и (если в диалоге " +
+                "упоминались требования по визе) каких ещё не хватает. Не выдумывай содержимое файлов — опирайся " +
+                "только на список из visa-cli docs."
+            val run = runCatching { engine.run(SkillDocs.load("visa-cli"), conv.messages, goal) }.getOrNull() ?: return@launch
+            val trace = run.calls.joinToString("\n") { "🔧 ${it.command}" }
+            val text = "🧰 Навык docs (Skill + CLI)\n" + (if (trace.isNotBlank()) "$trace\n\n" else "") + run.reply
+            val base = current ?: return@launch
+            val withMsg = base.withMessage(Message(Role.Assistant, text, usage = run.usage))
+            if (current?.id == withMsg.id) current = withMsg
+            repo.save(withMsg)
+            refreshList()
+        }
     }
 
     /** Приложить файл под КОНКРЕТНЫЙ документ из «ожидают загрузки» (в т.ч. в DONE): снять его из pending. */
