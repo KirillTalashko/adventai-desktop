@@ -37,6 +37,7 @@ private val USAGE = """
 
     Команды:
       docs [list]                       список приложенных документов аккаунта
+      docs check                        содержимое документов (для сверки: один ли заявитель)
       prompt-tune collect               сигналы из диалогов для улучшения промтов
       prompt-tune apply --role <id> --add "<текст>" [--reason "<r>"]   добавить персонализацию роли
       prompt-tune list                  текущая персонализация
@@ -69,8 +70,8 @@ private fun resolveAccountId(opts: Map<String, String>, accounts: AccountStore):
     opts["account"]?.ifBlank { null } ?: accounts.state().activeId.ifBlank { null }
 
 private fun docsCommand(sub: String, opts: Map<String, String>) {
-    if (sub.isNotEmpty() && sub != "list") {
-        println("docs: неизвестная подкоманда «$sub» (доступно: list)")
+    if (sub.isNotEmpty() && sub != "list" && sub != "check") {
+        println("docs: неизвестная подкоманда «$sub» (доступно: list, check)")
         return
     }
     val accounts = AccountStore(FileStore(appHomeDir()))
@@ -80,6 +81,15 @@ private fun docsCommand(sub: String, opts: Map<String, String>) {
     val files = accounts.docs(id).list()
     if (files.isEmpty()) {
         println("Документы не приложены (аккаунт $id).")
+        return
+    }
+    if (sub == "check") {
+        // Содержимое каждого файла — чтобы агент сверил ФИО/даты (один ли заявитель).
+        println("Содержимое приложенных документов (аккаунт $id): ${files.size}")
+        files.forEach { f ->
+            println("=== ${f.name} (${humanSize(f.length())}) ===")
+            println(com.example.adventdesktop.data.PdfText.extract(f))
+        }
         return
     }
     println("Приложенные документы (аккаунт $id): ${files.size}")

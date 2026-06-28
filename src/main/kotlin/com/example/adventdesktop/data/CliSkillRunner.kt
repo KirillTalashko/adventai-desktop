@@ -32,6 +32,8 @@ class CliSkillRunner(private val accountId: String?) : SkillRunner {
         // UTF-8 на дочернем процессе (вывод кириллицы) и при чтении на нашей стороне — иначе кракозябры в результате.
         val cmd = listOf(
             javaBin, "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8",
+            // Глушим логи PDFBox (commons-logging) — иначе font-cache WARNING попадут в вывод и в LLM.
+            "-Dorg.apache.commons.logging.Log=org.apache.commons.logging.impl.NoOpLog",
             "-cp", classpath, MAIN_CLASS,
         ) + args
         runCatching {

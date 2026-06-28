@@ -193,6 +193,11 @@ class ChatState(
         private set
     var mcpPipelineSteps by mutableStateOf<List<PipelineStep>>(emptyList())
         private set
+    // День 20: тест-пинг стороннего MCP (server-everything) в окне «Инструменты MCP».
+    var mcpExtraTesting by mutableStateOf(false)
+        private set
+    var mcpExtraTestResult by mutableStateOf<String?>(null)
+        private set
     private var mcpGateway: ToolGateway? = null
 
     init {
@@ -455,10 +460,11 @@ class ChatState(
         val repo = conversations ?: return
         scope.launch {
             val conv = current ?: return@launch
-            val goal = "Пользователь только что приложил документ «$justAdded». Вызови visa-cli docs, посмотри все " +
-                "приложенные файлы аккаунта и кратко прокомментируй: какие документы уже есть и (если в диалоге " +
-                "упоминались требования по визе) каких ещё не хватает. Не выдумывай содержимое файлов — опирайся " +
-                "только на список из visa-cli docs."
+            val goal = "Пользователь только что приложил документ «$justAdded». Вызови `visa-cli docs check` " +
+                "(он покажет содержимое каждого файла). Сверь: на ОДНО ли лицо оформлены документы (одинаковые ФИО) " +
+                "и бьются ли даты с поездкой. Кратко скажи, что приложено и чего не хватает по визе; и ВАЖНО — " +
+                "если документы похоже на РАЗНЫХ людей или данные противоречат, ЯВНО предупреди (⚠️) и не принимай " +
+                "пакет как валидный. Не выдумывай — опирайся на извлечённый текст; если текст не извлёкся (скан), скажи это."
             val run = runCatching { engine.run(SkillDocs.load("visa-cli"), conv.messages, goal) }.getOrNull() ?: return@launch
             val trace = run.calls.joinToString("\n") { "🔧 ${it.command}" }
             val text = "🧰 Навык docs (Skill + CLI)\n" + (if (trace.isNotBlank()) "$trace\n\n" else "") + run.reply
@@ -537,6 +543,7 @@ class ChatState(
         mcpVisaResult = null
         mcpPipelineSteps = emptyList()
         mcpPipelineMode = null
+        mcpExtraTestResult = null
         scope.launch {
             val gateway = toolGatewayFactory(
                 resolveLlmConfig(Models.byId("deepseek-chat"), config)?.apiKey,
@@ -587,6 +594,20 @@ class ChatState(
                 .onSuccess { mcpVisaResult = it }
                 .onFailure { mcpVisaResult = "ошибка: ${it.message}" }
             mcpVisaLoading = false
+        }
+    }
+
+    /** День 20: тест-пинг СТОРОННЕГО MCP (server-everything) через его тул `echo` — доказать, что 2-й сервер живой. */
+    fun testExtraMcp() {
+        val gateway = mcpGateway ?: return
+        if (mcpExtraTesting) return
+        mcpExtraTesting = true; mcpExtraTestResult = null
+        scope.launch {
+            val t0 = System.currentTimeMillis()
+            runCatching { gateway.callTool("echo", mapOf("message" to "ping от приложения")) }
+                .onSuccess { mcpExtraTestResult = "✓ ответ за ${System.currentTimeMillis() - t0} мс · $it" }
+                .onFailure { mcpExtraTestResult = "✗ нет ответа: ${it.message}" }
+            mcpExtraTesting = false
         }
     }
 
@@ -662,6 +683,7 @@ class ChatState(
         mcpVisaResult = null
         mcpPipelineSteps = emptyList()
         mcpPipelineMode = null
+        mcpExtraTestResult = null
         val gateway = mcpGateway
         mcpGateway = null
         scope.launch { runCatching { gateway?.close() } }

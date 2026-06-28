@@ -615,6 +615,15 @@ private fun McpToolsDialog(state: ChatState) {
                                     "Инструменты ниже получены С СЕРВЕРА: ${state.mcpTools.size}",
                                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                                if (state.extraMcpEnabled) {
+                                    val counts = state.mcpTools.groupingBy {
+                                        Regex("^\\[(.+?)]").find(it.description.orEmpty())?.groupValues?.get(1) ?: "(без метки)"
+                                    }.eachCount()
+                                    Text("🔌 Серверов подключено: ${counts.size}", style = MaterialTheme.typography.bodySmall, color = AppColors.accent, fontWeight = FontWeight.SemiBold)
+                                    counts.forEach { (srv, n) ->
+                                        Text("• $srv — тулзов: $n", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
                             }
                         }
                         state.mcpTools.forEach { tool ->
@@ -641,6 +650,19 @@ private fun McpToolsDialog(state: ChatState) {
                             }
                             state.mcpCheckResult?.let {
                                 Text(it, color = AppColors.accent, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                        if (state.extraMcpEnabled) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                TextButton(onClick = { state.testExtraMcp() }, enabled = !state.mcpExtraTesting) {
+                                    Text("Тест стороннего MCP (echo)")
+                                }
+                                if (state.mcpExtraTesting) {
+                                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                                }
+                            }
+                            state.mcpExtraTestResult?.let {
+                                Text(it, color = AppColors.accent, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
                             }
                         }
                         HorizontalDivider()
