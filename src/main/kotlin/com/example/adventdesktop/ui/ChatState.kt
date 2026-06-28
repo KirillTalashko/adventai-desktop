@@ -84,7 +84,7 @@ private const val PIPELINE_AGENT_PROMPT =
 class ChatState(
     private val accounts: AccountStore,
     private val configStore: ConfigStore,
-    private val toolGatewayFactory: (deepseekKey: String?, remoteUrl: String?, remoteToken: String?, extraMcp: Boolean) -> ToolGateway,
+    private val toolGatewayFactory: (deepseekKey: String?, remoteUrl: String?, remoteToken: String?, includeVisa: Boolean, includeExtra: Boolean) -> ToolGateway,
     private val scope: CoroutineScope
 ) {
     // --- глобальное (общее для аккаунтов) ---
@@ -549,7 +549,7 @@ class ChatState(
             val gateway = toolGatewayFactory(
                 resolveLlmConfig(Models.byId("deepseek-chat"), config)?.apiKey,
                 config.mcpRemoteUrl.ifBlank { null }, config.mcpRemoteToken.ifBlank { null },
-                config.extraMcpEnabled,
+                config.mcpEnabled, config.extraMcpEnabled,
             )
             mcpGateway = gateway
             runCatching {
@@ -750,7 +750,7 @@ class ChatState(
             val gw = agentTools ?: toolGatewayFactory(
                 resolveLlmConfig(Models.byId("deepseek-chat"), config)?.apiKey,
                 config.mcpRemoteUrl.ifBlank { null }, config.mcpRemoteToken.ifBlank { null },
-                config.extraMcpEnabled,
+                true, config.extraMcpEnabled,   // «через MCP»: visa нужен для сравнения по токенам
             )
             runCatching {
                 val tools = gw.listTools()
@@ -1132,10 +1132,10 @@ class ChatState(
         // День 18: если задан удалённый MCP (VPS) — агент ходит за инструментами туда (SSE+токен), иначе локально.
         // День 20: если MCP выключен переключателем — гейтвей не создаём (агент идёт без MCP-схем).
         agentTools?.let { old -> scope.launch { runCatching { old.close() } } }
-        agentTools = if (config.mcpEnabled) toolGatewayFactory(
+        agentTools = if (config.mcpEnabled || config.extraMcpEnabled) toolGatewayFactory(
             extractorLlm?.apiKey,
             config.mcpRemoteUrl.ifBlank { null }, config.mcpRemoteToken.ifBlank { null },
-            config.extraMcpEnabled,
+            config.mcpEnabled, config.extraMcpEnabled,
         ) else null
 
         val llm = resolveLlmConfig(model, config)

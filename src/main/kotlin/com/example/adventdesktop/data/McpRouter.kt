@@ -2,6 +2,9 @@ package com.example.adventdesktop.data
 
 import com.example.adventdesktop.domain.Tool
 import com.example.adventdesktop.domain.ToolGateway
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -18,22 +21,27 @@ class McpRouter(private val servers: List<Pair<String, ToolGateway>>) : ToolGate
     private val owner = mutableMapOf<String, ToolGateway>()
 
     override suspend fun connect() {
-        // Таймаут на сервер: один медленный/недоступный не должен вешать подключение остальных.
-        servers.forEach { (_, gw) -> runCatching { withTimeoutOrNull(CONNECT_TIMEOUT_MS) { gw.connect() } } }
+        // ПАРАЛЛЕЛЬНО + таймаут на сервер: общее время ≈ самого медленного, а не сумма; недоступный пропускается.
+        coroutineScope {
+            servers.map { (_, gw) -> async { runCatching { withTimeoutOrNull(CONNECT_TIMEOUT_MS) { gw.connect() } } } }.awaitAll()
+        }
     }
 
-    override suspend fun listTools(): List<Tool> {
+    override suspend fun listTools(): List<Tool> = coroutineScope {
         owner.clear()
+        // Опрашиваем серверы параллельно, собираем по порядку (карта имя→сервер строится без гонки).
+        val jobs = servers.map { (label, gw) ->
+            Triple(label, gw, async { runCatching { withTimeoutOrNull(LIST_TIMEOUT_MS) { gw.listTools() } }.getOrNull().orEmpty() })
+        }
         val all = mutableListOf<Tool>()
-        for ((label, gw) in servers) {
-            val tools = runCatching { withTimeoutOrNull(LIST_TIMEOUT_MS) { gw.listTools() } }.getOrNull().orEmpty()
-            for (t in tools) {
+        for ((label, gw, job) in jobs) {
+            for (t in job.await()) {
                 val name = if (owner.containsKey(t.name)) "${label}__${t.name}" else t.name
                 owner[name] = gw
                 all += t.copy(name = name, description = "[$label] ${t.description.orEmpty()}".trim())
             }
         }
-        return all
+        all
     }
 
     override suspend fun callTool(name: String, arguments: Map<String, Any?>): String =
