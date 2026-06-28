@@ -50,6 +50,7 @@ import com.example.adventdesktop.domain.WorkingMemory
 import com.example.adventdesktop.domain.transitionTo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
 private const val DEFAULT_TITLE = "Новая сессия"
@@ -552,8 +553,11 @@ class ChatState(
             )
             mcpGateway = gateway
             runCatching {
-                gateway.connect()
-                gateway.listTools()
+                // Таймаут: первый запуск стороннего npx-сервера может качать пакет — но окно не должно висеть вечно.
+                withTimeoutOrNull(40_000) {
+                    gateway.connect()
+                    gateway.listTools()
+                } ?: error("MCP-сервер не ответил за 40 с (недоступен? первый запуск npx мог скачивать пакет — повторите).")
             }.onSuccess { mcpTools = it }
                 .onFailure { mcpError = it.message ?: "Не удалось подключиться к MCP" }
             mcpConnecting = false

@@ -2,6 +2,7 @@ package com.example.adventdesktop.data
 
 import com.example.adventdesktop.domain.Tool
 import com.example.adventdesktop.domain.ToolGateway
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Мультисервер-маршрутизатор MCP (День 20, оркестрация: «несколько MCP-серверов»). Реализует тот же порт
@@ -17,14 +18,15 @@ class McpRouter(private val servers: List<Pair<String, ToolGateway>>) : ToolGate
     private val owner = mutableMapOf<String, ToolGateway>()
 
     override suspend fun connect() {
-        servers.forEach { (_, gw) -> runCatching { gw.connect() } }
+        // Таймаут на сервер: один медленный/недоступный не должен вешать подключение остальных.
+        servers.forEach { (_, gw) -> runCatching { withTimeoutOrNull(CONNECT_TIMEOUT_MS) { gw.connect() } } }
     }
 
     override suspend fun listTools(): List<Tool> {
         owner.clear()
         val all = mutableListOf<Tool>()
         for ((label, gw) in servers) {
-            val tools = runCatching { gw.listTools() }.getOrDefault(emptyList())
+            val tools = runCatching { withTimeoutOrNull(LIST_TIMEOUT_MS) { gw.listTools() } }.getOrNull().orEmpty()
             for (t in tools) {
                 val name = if (owner.containsKey(t.name)) "${label}__${t.name}" else t.name
                 owner[name] = gw
@@ -49,4 +51,9 @@ class McpRouter(private val servers: List<Pair<String, ToolGateway>>) : ToolGate
 
     /** Снять префикс сервера, добавленный при коллизии имён. */
     private fun realName(name: String): String = name.substringAfter("__", name)
+
+    private companion object {
+        const val CONNECT_TIMEOUT_MS = 35_000L   // первый запуск npx может качать пакет
+        const val LIST_TIMEOUT_MS = 20_000L
+    }
 }
