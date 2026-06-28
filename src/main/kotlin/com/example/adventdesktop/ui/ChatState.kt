@@ -49,6 +49,20 @@ private const val EXTRACT_WINDOW = 4
 /** Предел авто-продвижения стадий за один запуск (защита от зацикливания, напр. бесконечного revise). */
 private const val MAX_AUTO_CHAIN = 16
 
+/** День 19: один шаг пайплайна композиции MCP-инструментов — для показа цепочки и передачи данных в UI. */
+data class PipelineStep(val tool: String, val title: String, val output: String, val ok: Boolean)
+
+/** Тулы пайплайна композиции (День 19). Их НЕ отдаём основному агенту-консультанту — только пайплайн-демо. */
+private val PIPELINE_TOOL_NAMES = setOf("visa_search", "visa_summarize", "save_report")
+
+private const val PIPELINE_AGENT_PROMPT =
+    "Ты — оркестратор пайплайна из MCP-инструментов. Доступны: visa_search (поиск → сырые источники), " +
+        "visa_summarize (сжать присланный текст), save_report (сохранить контент в файл-отчёт). " +
+        "Чтобы выполнить цель пользователя, ВЫЗОВИ их строго по очереди, передавая вывод предыдущего на вход " +
+        "следующего: 1) visa_search(query); 2) visa_summarize(text = вывод visa_search); " +
+        "3) save_report(filename = осмысленное имя .md по теме, content = вывод visa_summarize). " +
+        "Не пропускай шаги и не выдумывай данные. После сохранения кратко подтверди путь к файлу."
+
 /**
  * Держатель UI-состояния и оркестратор. Управляет локальными аккаунтами (Day 12): у каждого свои
  * диалоги, память и профиль предпочтений; профиль подмешивается в каждый запрос. Ключи/модель — глобальные.
@@ -144,6 +158,14 @@ class ChatState(
     var mcpVisaLoading by mutableStateOf(false)
         private set
     var mcpVisaResult by mutableStateOf<String?>(null)
+        private set
+    // --- День 19: композиция MCP-инструментов (пайплайн visa_search → visa_summarize → save_report) ---
+    var mcpPipelineQuery by mutableStateOf("Испания туристическая виза для граждан России: документы, сборы, сроки")
+    var mcpPipelineRunning by mutableStateOf(false)
+        private set
+    var mcpPipelineMode by mutableStateOf<String?>(null)
+        private set
+    var mcpPipelineSteps by mutableStateOf<List<PipelineStep>>(emptyList())
         private set
     private var mcpGateway: ToolGateway? = null
 
@@ -457,6 +479,8 @@ class ChatState(
         mcpTools = emptyList()
         mcpCheckResult = null
         mcpVisaResult = null
+        mcpPipelineSteps = emptyList()
+        mcpPipelineMode = null
         scope.launch {
             val gateway = toolGatewayFactory(
                 resolveLlmConfig(Models.byId("deepseek-chat"), config)?.apiKey,
@@ -509,11 +533,78 @@ class ChatState(
         }
     }
 
+    /**
+     * День 19 — ДЕТЕРМИНИРОВАННЫЙ пайплайн: код сам вызывает три тула по порядку, передавая вывод
+     * предыдущего на вход следующего (visa_search → visa_summarize → save_report). Наглядно видно цепочку
+     * и корректность передачи данных между инструментами.
+     */
+    fun runPipelineDeterministic() {
+        val gateway = mcpGateway ?: return
+        val query = mcpPipelineQuery.trim()
+        if (query.isEmpty() || mcpPipelineRunning) return
+        mcpPipelineRunning = true
+        mcpPipelineMode = "детерминированный — код вызывает 3 тула по порядку"
+        mcpPipelineSteps = emptyList()
+        scope.launch {
+            val steps = mutableListOf<PipelineStep>()
+            fun push(s: PipelineStep) { steps.add(s); mcpPipelineSteps = steps.toList() }
+            // Шаг 1 — ПОЛУЧИТЬ данные.
+            val r1 = runCatching { gateway.callTool("visa_search", mapOf("query" to query)) }
+                .getOrElse { "ошибка: ${it.message}" }
+            push(PipelineStep("visa_search", "1. visa_search — получить данные", r1, !r1.startsWith("ошибка")))
+            // Шаг 2 — ОБРАБОТАТЬ вывод шага 1.
+            val r2 = runCatching { gateway.callTool("visa_summarize", mapOf("text" to r1, "focus" to query)) }
+                .getOrElse { "ошибка: ${it.message}" }
+            push(PipelineStep("visa_summarize", "2. visa_summarize — обработать вывод шага 1", r2, !r2.startsWith("ошибка")))
+            // Шаг 3 — СОХРАНИТЬ вывод шага 2.
+            val fname = "visa-report-${System.currentTimeMillis()}.md"
+            val r3 = runCatching { gateway.callTool("save_report", mapOf("filename" to fname, "content" to r2)) }
+                .getOrElse { "ошибка: ${it.message}" }
+            push(PipelineStep("save_report", "3. save_report — сохранить вывод шага 2", r3, !r3.startsWith("ошибка")))
+            mcpPipelineRunning = false
+        }
+    }
+
+    /**
+     * День 19 — АГЕНТНЫЙ пайплайн: даём модели те же три тула и цель; tool-loop ([LlmClient]) САМ вызывает их
+     * по порядку, передавая данные между ними. Показываем фактический след вызовов (🔧) и итог.
+     */
+    fun runPipelineAgent() {
+        val gateway = mcpGateway ?: return
+        val llm = client ?: run { mcpError = noKeyError(); return }
+        val query = mcpPipelineQuery.trim()
+        if (query.isEmpty() || mcpPipelineRunning) return
+        mcpPipelineRunning = true
+        mcpPipelineMode = "агентный — LLM сам решает и вызывает тулы (tool-loop)"
+        mcpPipelineSteps = emptyList()
+        scope.launch {
+            val steps = mutableListOf<PipelineStep>()
+            runCatching {
+                val pipelineTools = gateway.listTools().filter { it.name in PIPELINE_TOOL_NAMES }
+                val messages = listOf(
+                    Message(Role.System, PIPELINE_AGENT_PROMPT),
+                    Message(Role.User, "Цель: по теме «$query» собери актуальную выжимку и сохрани её в файл-отчёт."),
+                )
+                val resp = llm.complete(messages, pipelineTools) { name, args -> gateway.callToolJson(name, args) }
+                resp.toolResults.forEachIndexed { i, tr ->
+                    steps.add(PipelineStep(tr.name, "${i + 1}. 🔧 ${tr.name}(${tr.args.take(80)})", tr.result, true))
+                }
+                steps.add(PipelineStep("(итог)", "Ответ агента", resp.text, true))
+                mcpPipelineSteps = steps.toList()
+            }.onFailure {
+                mcpPipelineSteps = listOf(PipelineStep("(ошибка)", "Сбой пайплайна", it.message ?: "неизвестно", false))
+            }
+            mcpPipelineRunning = false
+        }
+    }
+
     /** Закрыть окно MCP и остановить серверный подпроцесс. */
     fun closeMcpDialog() {
         mcpDialogOpen = false
         mcpCheckResult = null
         mcpVisaResult = null
+        mcpPipelineSteps = emptyList()
+        mcpPipelineMode = null
         val gateway = mcpGateway
         mcpGateway = null
         scope.launch { runCatching { gateway?.close() } }

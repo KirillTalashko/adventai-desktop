@@ -557,6 +557,62 @@ private fun McpToolsDialog(state: ChatState) {
                             )
                             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
                         }
+
+                        // --- День 19: композиция MCP-инструментов (пайплайн) ---
+                        HorizontalDivider()
+                        Text(
+                            "День 19 — пайплайн (композиция): visa_search → visa_summarize → save_report",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            "Цепочка автоматически: вывод каждого тула идёт на вход следующему.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        OutlinedTextField(
+                            value = state.mcpPipelineQuery,
+                            onValueChange = { state.mcpPipelineQuery = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Запрос для пайплайна") },
+                            maxLines = 3
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            TextButton(onClick = { state.runPipelineDeterministic() }, enabled = !state.mcpPipelineRunning) {
+                                Text("▶ Запустить (по коду)")
+                            }
+                            TextButton(onClick = { state.runPipelineAgent() }, enabled = !state.mcpPipelineRunning) {
+                                Text("🤖 Запустить (агент)")
+                            }
+                            if (state.mcpPipelineRunning) {
+                                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                            }
+                        }
+                        state.mcpPipelineMode?.let {
+                            Text("режим: $it", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        state.mcpPipelineSteps.forEach { step ->
+                            val tint = if (step.ok) AppColors.accent else MaterialTheme.colorScheme.error
+                            Surface(
+                                color = tint.copy(alpha = 0.08f),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    Text(
+                                        step.title, fontWeight = FontWeight.SemiBold,
+                                        style = MaterialTheme.typography.labelMedium, color = tint
+                                    )
+                                    Text(
+                                        step.output.take(900),
+                                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }

@@ -169,6 +169,33 @@ private suspend fun resolvePortal(http: HttpClient, enName: String, tavilyKey: S
     resolveLivePortal(http, enName, tavilyKey) ?: officialPortal(enName)
         ?: "(уточните официальный визовый портал страны)"
 
+// --- День 19: хелперы пайплайна композиции MCP-инструментов (visa_summarize / save_report) ---
+
+private const val SUMMARIZE_PROMPT =
+    "Ты — редактор. Сожми присланный текст в краткую структурированную выжимку на русском: 4–7 пунктов, " +
+        "только важное (нужна ли виза, документы, сборы, сроки, куда подавать). ОБЯЗАТЕЛЬНО сохрани конкретные " +
+        "https://-ссылки из текста. Без воды и вступлений. Если задан focus — расставь акценты под него."
+
+/** Стадия 2 пайплайна: сжать текст внутренним LLM (без ключа — простая обрезка, чтобы цепочка не падала). */
+private suspend fun summarizeText(llm: LlmClient?, text: String, focus: String): String {
+    if (text.isBlank()) return "(пустой вход — нечего суммировать)"
+    if (llm == null) return text.lines().filter { it.isNotBlank() }.take(15).joinToString("\n").take(1200)
+    val user = buildString {
+        if (focus.isNotBlank()) append("Focus: ").append(focus).append("\n\n")
+        append("ТЕКСТ:\n").append(text.take(8000))
+    }
+    return runCatching {
+        llm.complete(listOf(Message(Role.System, SUMMARIZE_PROMPT), Message(Role.User, user))).text.trim()
+    }.getOrElse { text.take(1200) }
+}
+
+/** Безопасное имя файла отчёта: только базовое имя, разрешённые символы, расширение по умолчанию .md (защита от path-traversal). */
+private fun safeReportName(raw: String): String {
+    val base = raw.trim().substringAfterLast('/').substringAfterLast('\\').ifBlank { "report" }
+    val cleaned = base.replace(Regex("[^\\p{L}\\p{N}._-]"), "_").take(80)
+    return if (cleaned.contains('.')) cleaned else "$cleaned.md"
+}
+
 private fun createHttpClient(): HttpClient = HttpClient(CIO) {
     defaultRequest {
         headers { append("User-Agent", "AdventAI-VisaMCP/0.2 (AI Advent Challenge; local)") }
@@ -200,6 +227,10 @@ fun main(): Unit = runBlocking {
     val dbPath = System.getenv("DIGEST_DB")?.trim()?.ifBlank { null }
         ?: File(File(appHomeDir(), "scheduler"), "visa-digest.db").absolutePath
     val intervalMin = System.getenv("DIGEST_INTERVAL_MINUTES")?.trim()?.toLongOrNull() ?: 360L
+    // --- День 19: каталог отчётов для save_report (под writable-путём сервиса; рядом с БД дайджеста) ---
+    val reportsDir = System.getenv("REPORTS_DIR")?.trim()?.ifBlank { null }?.let { File(it) }
+        ?: File(File(dbPath).absoluteFile.parentFile ?: appHomeDir(), "reports")
+    runCatching { reportsDir.mkdirs() }
     val store = DigestStore(dbPath)
     // Сбор сводки по одной стране — тем же внутренним research-агентом, что и get_visa_requirements.
     val collect: suspend (DigestCountry) -> Pair<String, String>? = collect@{ c ->
@@ -224,7 +255,7 @@ fun main(): Unit = runBlocking {
     // Сборка свежего Server со всеми тулзами — вызывается один раз для stdio и на каждую SSE-сессию.
     fun buildServer(): Server {
     val server = Server(
-        Implementation(name = "visa-mcp", version = "0.4.0"),
+        Implementation(name = "visa-mcp", version = "0.5.0"),
         ServerOptions(capabilities = ServerCapabilities(tools = ServerCapabilities.Tools(listChanged = true))),
     )
 
@@ -394,6 +425,79 @@ fun main(): Unit = runBlocking {
             }
         }
         CallToolResult(content = listOf(TextContent(text)))
+    }
+
+    // === День 19: КОМПОЗИЦИЯ MCP-инструментов — пайплайн visa_search → visa_summarize → save_report ===
+
+    // Шаг 1 — ПОЛУЧИТЬ данные: живой поиск, отдаёт СЫРЫЕ источники (вход для visa_summarize).
+    server.addTool(
+        name = "visa_search",
+        description = "Шаг 1 пайплайна. Ищет в вебе официальные источники по запросу и возвращает СЫРОЙ список " +
+            "найденного (заголовок, [офиц.], URL, сниппет). Это вход для visa_summarize. Вход: query (строка).",
+        inputSchema = ToolSchema(
+            properties = buildJsonObject {
+                putJsonObject("query") { put("type", "string"); put("description", "Поисковый запрос, напр. «Spain tourist visa Russian citizens documents fee»") }
+            },
+            required = listOf("query"),
+        ),
+        toolAnnotations = ToolAnnotations(readOnlyHint = true, openWorldHint = true),
+    ) { request ->
+        val query = request.arguments?.get("query")?.jsonPrimitive?.content?.trim().orEmpty()
+        if (query.isBlank()) return@addTool CallToolResult(content = listOf(TextContent("Параметр «query» обязателен.")))
+        val hits = runCatching { httpClient.searchVisa(query, tavilyKey, limit = 6) }.getOrDefault(emptyList())
+        val text = if (hits.isEmpty()) "По запросу «$query» источников не найдено."
+        else hits.joinToString("\n\n") {
+            "• ${it.title}${if (it.official) " [офиц.]" else ""}\n  URL: ${it.url}\n  ${it.snippet.take(300)}"
+        }
+        CallToolResult(content = listOf(TextContent(text)))
+    }
+
+    // Шаг 2 — ОБРАБОТАТЬ: сжать присланный текст в краткую выжимку (со ссылками).
+    server.addTool(
+        name = "visa_summarize",
+        description = "Шаг 2 пайплайна. Сжимает присланный ТЕКСТ (обычно вывод visa_search) в краткую " +
+            "структурированную выжимку, сохраняя https://-ссылки. Вход: text (строка, обязательно), focus (опц.).",
+        inputSchema = ToolSchema(
+            properties = buildJsonObject {
+                putJsonObject("text") { put("type", "string"); put("description", "Текст для сжатия (например, результат visa_search)") }
+                putJsonObject("focus") { put("type", "string"); put("description", "На чём сделать акцент (опционально)") }
+            },
+            required = listOf("text"),
+        ),
+        toolAnnotations = ToolAnnotations(readOnlyHint = true, openWorldHint = false),
+    ) { request ->
+        val text = request.arguments?.get("text")?.jsonPrimitive?.content.orEmpty()
+        val focus = request.arguments?.get("focus")?.jsonPrimitive?.content?.trim().orEmpty()
+        if (text.isBlank()) return@addTool CallToolResult(content = listOf(TextContent("Параметр «text» обязателен.")))
+        CallToolResult(content = listOf(TextContent(summarizeText(llm, text, focus))))
+    }
+
+    // Шаг 3 — СОХРАНИТЬ результат: пишет контент в файл-отчёт на сервере, возвращает путь, размер и сам контент.
+    server.addTool(
+        name = "save_report",
+        description = "Шаг 3 пайплайна. Сохраняет переданный КОНТЕНТ (обычно вывод visa_summarize) в файл-отчёт " +
+            "на сервере; возвращает путь, размер и контент. Вход: filename (строка), content (строка).",
+        inputSchema = ToolSchema(
+            properties = buildJsonObject {
+                putJsonObject("filename") { put("type", "string"); put("description", "Имя файла, напр. «spain-visa.md»") }
+                putJsonObject("content") { put("type", "string"); put("description", "Содержимое отчёта (например, вывод visa_summarize)") }
+            },
+            required = listOf("filename", "content"),
+        ),
+        toolAnnotations = ToolAnnotations(readOnlyHint = false, openWorldHint = false),
+    ) { request ->
+        val filename = request.arguments?.get("filename")?.jsonPrimitive?.content.orEmpty()
+        val content = request.arguments?.get("content")?.jsonPrimitive?.content.orEmpty()
+        if (filename.isBlank() || content.isBlank()) {
+            return@addTool CallToolResult(content = listOf(TextContent("Параметры «filename» и «content» обязательны.")))
+        }
+        val file = File(reportsDir, safeReportName(filename))
+        val saved = runCatching { file.writeText(content); file.absolutePath }.getOrElse {
+            return@addTool CallToolResult(content = listOf(TextContent("Не удалось сохранить отчёт: ${it.message}")))
+        }
+        CallToolResult(content = listOf(TextContent(
+            "✅ Отчёт сохранён: $saved (${content.toByteArray().size} байт)\n\n--- Содержимое отчёта ---\n$content",
+        )))
     }
 
         return server

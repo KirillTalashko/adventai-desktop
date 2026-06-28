@@ -286,8 +286,12 @@ class TaskOrchestrator(
             add(Message(Role.User, instruction))
         }
         // Фаза 2: на «отвечающих» стадиях даём модели MCP-инструменты; tool-loop ведёт LlmClient.
+        // Тулы пайплайна (День 19, visa_search/visa_summarize/save_report) — НЕ для основного агента: у него
+        // есть get_visa_requirements (богатый research). Их использует только демо-пайплайн «Инструменты MCP».
         val gw = tools
-        val toolList = if (useTools && gw != null) runCatching { gw.listTools() }.getOrDefault(emptyList()) else emptyList()
+        val toolList = if (useTools && gw != null)
+            runCatching { gw.listTools() }.getOrDefault(emptyList()).filterNot { it.name in PIPELINE_TOOLS }
+        else emptyList()
         val executeTool: (suspend (String, String) -> String)? =
             if (gw != null && toolList.isNotEmpty()) { name, args -> gw.callToolJson(name, args) } else null
         var resp = gateway.complete(messages, toolList, executeTool)
@@ -353,6 +357,9 @@ class TaskOrchestrator(
 
         /** Предел длины сохраняемого синтеза [TaskContext.research] в [STATE] (баланс «ссылки сохранены / токены»). */
         const val RESEARCH_CAP = 3500
+
+        /** Тулы пайплайна композиции (День 19) — основному агенту не отдаём (их использует только демо-пайплайн). */
+        val PIPELINE_TOOLS = setOf("visa_search", "visa_summarize", "save_report")
 
         val CONTROL_TAGS = listOf("[SIMPLE]", "[READY]", "[ASK]", "[NEED_DOC]", "[STEP_RESULT]", "[VERDICT]", "[PIVOT]")
 
