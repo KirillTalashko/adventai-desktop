@@ -53,6 +53,7 @@ class AccountStore(private val root: FileStore) {
     fun profiles(accountId: String): ProfileStore = ProfileStore(accountRoot(accountId))
     fun docs(accountId: String): DocStore = DocStore(accountRoot(accountId))
     fun invariants(accountId: String): InvariantStore = InvariantStore(accountRoot(accountId))
+    fun promptOverrides(accountId: String): PromptOverrideStore = PromptOverrideStore(accountRoot(accountId))
 
     private fun accountRoot(id: String) = FileStore(File(accountsDir, id))
 

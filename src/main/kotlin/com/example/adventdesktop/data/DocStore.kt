@@ -6,6 +6,9 @@ import java.io.File
 class DocStore(store: FileStore) {
     private val dir = store.dir("docs")
 
+    /** Список приложенных файлов (День 20: используется скиллом `visa-cli docs` и приложением). */
+    fun list(): List<File> = (dir.listFiles()?.filter { it.isFile } ?: emptyList()).sortedBy { it.name }
+
     /** Скопировать [source] в `docs/`; вернуть сохранённое имя (с защитой от коллизий) или null при ошибке. */
     fun save(source: File): String? = runCatching {
         val safe = source.name.replace(Regex("[\\\\/:*?\"<>|]"), "_").ifBlank { "document" }

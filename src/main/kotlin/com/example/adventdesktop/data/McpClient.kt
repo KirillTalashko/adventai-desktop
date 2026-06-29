@@ -44,6 +44,8 @@ class McpClient(
     private val deepseekApiKey: String? = null,
     private val sseUrl: String? = null,
     private val authToken: String? = null,
+    /** День 20: произвольная stdio-команда стороннего MCP (напр. `npx -y @modelcontextprotocol/server-everything`). */
+    private val stdioCommand: List<String>? = null,
 ) : ToolGateway {
 
     private var client: Client? = null
@@ -59,8 +61,27 @@ class McpClient(
 
     override suspend fun connect() {
         if (connected) return
-        if (sseUrl != null) connectRemote() else connectLocal()
+        when {
+            stdioCommand != null -> connectStdioCommand(stdioCommand)
+            sseUrl != null -> connectRemote()
+            else -> connectLocal()
+        }
         connected = true
+    }
+
+    /** День 20: подключение к СТОРОННЕМУ MCP-серверу, запущенному произвольной командой по stdio. */
+    private suspend fun connectStdioCommand(command: List<String>) {
+        val process = ProcessBuilder(command)
+            .redirectError(ProcessBuilder.Redirect.INHERIT)   // диагностика сервера — в нашу консоль
+            .start()
+        serverProcess = process
+        val transport = StdioClientTransport(
+            input = process.inputStream.asSource().buffered(),
+            output = process.outputStream.asSink().buffered(),
+        )
+        val c = Client(clientInfo = Implementation(name = "visa-mcp-client", version = "0.1.0"))
+        c.connect(transport)
+        client = c
     }
 
     /** Удалённый режим (День 18): подключение к VPS-серверу по SSE с bearer-токеном. */

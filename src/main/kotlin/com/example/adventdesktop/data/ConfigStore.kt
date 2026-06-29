@@ -10,6 +10,12 @@ data class DesktopConfig(
     // День 18: удалённый MCP-сервер (VPS). Если URL задан — агент ходит за инструментами туда (SSE+токен).
     val mcpRemoteUrl: String = "",
     val mcpRemoteToken: String = "",
+    // День 20: переключатели коннекторов агента (MCP vs локальный Skill+CLI).
+    val mcpEnabled: Boolean = true,
+    val skillDocsEnabled: Boolean = false,
+    val skillPromptTuneEnabled: Boolean = false,
+    // День 20: подключить СТОРОННЕЕ MCP (server-everything через npx) — второй сервер в маршрутизаторе.
+    val extraMcpEnabled: Boolean = false,
 ) {
     fun keyFor(provider: String): String = if (provider == "deepseek") deepseekKey else openrouterKey
 }
@@ -34,6 +40,10 @@ class ConfigStore(private val store: FileStore) {
             modelId = dto.modelId,
             mcpRemoteUrl = dto.mcpRemoteUrl.ifBlank { System.getenv("MCP_REMOTE_URL").orEmpty() }.trim(),
             mcpRemoteToken = dto.mcpRemoteToken.ifBlank { System.getenv("MCP_REMOTE_TOKEN").orEmpty() }.trim(),
+            mcpEnabled = dto.mcpEnabled,
+            skillDocsEnabled = dto.skillDocsEnabled,
+            skillPromptTuneEnabled = dto.skillPromptTuneEnabled,
+            extraMcpEnabled = dto.extraMcpEnabled,
         )
     }
 
@@ -47,6 +57,10 @@ class ConfigStore(private val store: FileStore) {
                     modelId = config.modelId,
                     mcpRemoteUrl = config.mcpRemoteUrl,
                     mcpRemoteToken = config.mcpRemoteToken,
+                    mcpEnabled = config.mcpEnabled,
+                    skillDocsEnabled = config.skillDocsEnabled,
+                    skillPromptTuneEnabled = config.skillPromptTuneEnabled,
+                    extraMcpEnabled = config.extraMcpEnabled,
                 )
             )
         )

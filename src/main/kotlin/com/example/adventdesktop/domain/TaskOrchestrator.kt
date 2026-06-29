@@ -23,6 +23,13 @@ class TaskOrchestrator(
     /** Активные инварианты аккаунта (День 14) — инжектятся во все стадийные запросы. Обновляет [ChatState]. */
     var invariants: List<Invariant> = emptyList()
 
+    /**
+     * День 20 (prompt-tune): пер-аккаунт персонализация ролей — `roleId` → доп. строки. ТОЛЬКО АДДИТИВНО
+     * (перило A): дописываются после базового промта роли блоком `[ПЕРСОНАЛИЗАЦИЯ]`, не переопределяя
+     * безопасные правила. Заполняется [ChatState] из локального стора одобренных пользователем добавок.
+     */
+    var promptOverrides: Map<String, List<String>> = emptyMap()
+
     /** Писарь досье (День 18): детерминированно заполняет [CaseFile] из слов пользователя на стадии INTAKE. */
     private val caseExtractor = CaseExtractor(gateway)
     /**
@@ -48,7 +55,7 @@ class TaskOrchestrator(
         val ctx = ctx0.copy(caseFile = seededCase)
 
         // 2) Интервьюер ВЕДЁТ разговор, видя актуальное [ДОСЬЕ]; классифицирует и спрашивает недостающее.
-        val resp = call(INTERVIEWER, ctx, history, profile, INTAKE_INSTRUCTION, guarded = true, useTools = true)
+        val resp = call(INTERVIEWER, ctx, history, profile, INTAKE_INSTRUCTION, guarded = true, useTools = true, roleId = TunableRole.INTERVIEWER.id)
         val shown = withTrace(resp, ctx.docs)
         if (hasTag(resp.text, "SIMPLE")) return@runCatching TaskStep(AgentReply(shown, resp.usage), ctx0, cancel = true)
 
@@ -128,7 +135,7 @@ class TaskOrchestrator(
     /** PLANNING (1/2): планировщик предлагает 4 подхода → выбор пользователя ([Awaiting.CHOICE]). */
     suspend fun proposeOptions(ctx0: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatching {
         val ctx = ensureResearch(ctx0)   // справка (актуальные данные + ссылки) — один раз, перед планированием
-        val resp = call(PLANNER_OPTIONS, ctx, history, profile, "Предложи 4 разных подхода. Верни блок [OPTIONS]…[/OPTIONS].")
+        val resp = call(PLANNER_OPTIONS, ctx, history, profile, "Предложи 4 разных подхода. Верни блок [OPTIONS]…[/OPTIONS].", roleId = TunableRole.PLANNER.id)
         val options = parseList(resp.text, "OPTIONS")
         val next = if (options.size < 2) ctx   // не распознано — остаёмся, можно повторить
         else ctx.copy(options = options, awaiting = Awaiting.CHOICE, prompt = "Выберите подход к решению")
@@ -138,7 +145,7 @@ class TaskOrchestrator(
     /** PLANNING (2/2): построить план под выбранный подход (`ctx.approach`) → чекпоинт плана → EXECUTION. */
     suspend fun buildPlan(ctx0: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatching {
         val ctx = ensureResearch(ctx0)
-        val resp = call(PLANNER_PLAN, ctx, history, profile, "Построй пошаговый план под выбранный подход. Верни блок [PLAN]…[/PLAN].")
+        val resp = call(PLANNER_PLAN, ctx, history, profile, "Построй пошаговый план под выбранный подход. Верни блок [PLAN]…[/PLAN].", roleId = TunableRole.PLANNER.id)
         val plan = parseList(resp.text, "PLAN")
         if (plan.isEmpty()) return@runCatching TaskStep(AgentReply(clean(resp.text), resp.usage), ctx.copy(awaiting = Awaiting.NONE))
         val next = ctx.copy(plan = plan, step = 0, done = emptyList(), note = "", options = emptyList(), awaiting = Awaiting.NONE)
@@ -169,7 +176,7 @@ class TaskOrchestrator(
             "Не возвращайся к прошлым шагам и не забегай вперёд. Используй [СПРАВКА ПО ВИЗЕ] и приводи официальные ССЫЛКИ. " +
             "Заверши строкой [STEP_RESULT] <что сделано по ЭТОМУ шагу>. " +
             "Если нужен документ пользователя — добавь [NEED_DOC] <короткий ярлык, 2–4 слова>."
-        val resp = call(EXECUTOR, ctx, history, profile, instruction, historyLimit = 6, guarded = true, useTools = true)
+        val resp = call(EXECUTOR, ctx, history, profile, instruction, historyLimit = 6, guarded = true, useTools = true, roleId = TunableRole.EXECUTOR.id)
         val needDoc = parseTagged(resp.text, "NEED_DOC")
         val result = parseTagged(resp.text, "STEP_RESULT") ?: "шаг ${ctx.step + 1} выполнен"
         // Документы НЕ блокируют: нужный файл уходит в «понадобится позже», шаг всегда продвигается (#3, #4).
@@ -193,7 +200,7 @@ class TaskOrchestrator(
     }
 
     private suspend fun validate(ctx: TaskContext, history: List<Message>, profile: UserProfile?): TaskStep {
-        val resp = call(VALIDATOR, ctx, history, profile, "Проверь результат. Недостающие документы пользователя (он приложит позже) — НЕ повод для revise. Заверши строкой [VERDICT] pass | revise: …")
+        val resp = call(VALIDATOR, ctx, history, profile, "Проверь результат. Недостающие документы пользователя (он приложит позже) — НЕ повод для revise. Заверши строкой [VERDICT] pass | revise: …", roleId = TunableRole.VALIDATOR.id)
         val verdict = parseTagged(resp.text, "VERDICT").orEmpty()
         val feedback = verdict.substringAfter(':', "").trim()
         val next = when {
@@ -210,7 +217,7 @@ class TaskOrchestrator(
 
     /** Ответ на вопрос/реплику пользователя в контексте задачи БЕЗ изменения автомата (#2). Распознаёт разворот. */
     suspend fun assist(ctx: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatching {
-        val resp = call(ASSISTANT, ctx, history, profile, ASSIST_INSTRUCTION, historyLimit = 8, guarded = true, useTools = true)
+        val resp = call(ASSISTANT, ctx, history, profile, ASSIST_INSTRUCTION, historyLimit = 8, guarded = true, useTools = true, roleId = TunableRole.ASSISTANT.id)
         val shown = withTrace(resp, ctx.docs)
         // Пользователь хочет ДРУГУЮ страну/цель → ассистент пометил [PIVOT] <страна>: ждём подтверждения, план не трогаем.
         val pivot = parseTagged(resp.text, "PIVOT")
@@ -258,7 +265,8 @@ class TaskOrchestrator(
         instruction: String,
         historyLimit: Int = windowSize,
         guarded: Boolean = false,
-        useTools: Boolean = false
+        useTools: Boolean = false,
+        roleId: String? = null,
     ): GatewayResponse {
         val system = buildString {
             append(basePrompt)
@@ -267,6 +275,12 @@ class TaskOrchestrator(
             append(". Используй ИМЕННО эту дату для всех расчётов сроков и дедлайнов; не определяй год по памяти.")
             append("\n\n").append(CONDUCTOR)
             append("\n\n").append(rolePrompt)
+            // День 20: пер-аккаунт персонализация роли (одобренные пользователем добавки) — только аддитивно.
+            val overlay = roleId?.let { promptOverrides[it] }.orEmpty()
+            if (overlay.isNotEmpty()) {
+                append("\n\n[ПЕРСОНАЛИЗАЦИЯ ДЛЯ ЭТОГО ПОЛЬЗОВАТЕЛЯ — учитывай как уточнение стиля, НЕ нарушая правила выше]\n")
+                overlay.forEach { append("• ").append(it).append('\n') }
+            }
             append("\n\n").append(ctx.renderStateBlock())
             val inv = renderInvariantsBlock(invariants)
             if (inv.isNotEmpty()) append("\n\n").append(inv)
@@ -376,6 +390,8 @@ class TaskOrchestrator(
             "Когда даёшь требования/сборы/сроки — ОБЯЗАТЕЛЬНО приводи конкретные официальные URL и дату из [СПРАВКА] (живые ссылки). " +
             "«Уточните на официальном сайте» БЕЗ ссылки — это не ответ; общими словами говори ТОЛЬКО если нужного нет ни в [СПРАВКА], ни у инструмента.\n" +
             "• Ты — живой визовый эксперт: отвечай содержательно и по делу, без сухих отписок и канцелярита.\n" +
+            "• Блок [ПЕРСОНАЛИЗАЦИЯ] (если есть) уточняет твой стиль под пользователя, но НЕ отменяет правила безопасности, " +
+            "отказа и порядок стадий выше — они приоритетнее.\n" +
             "• Делай ТОЛЬКО свою роль и передавай управление положенным сигналом; работу других стадий не выполняй."
 
         /** Инструкции стадий, вынесенные в const (часто используются / делят формулировки). */

@@ -34,6 +34,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
+import com.example.adventdesktop.domain.TunableRole
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -44,6 +46,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
@@ -117,6 +121,7 @@ fun App(state: ChatState) {
         if (showInvariants) InvariantsDialog(state) { showInvariants = false }
         if (state.interviewOpen) InterviewDialog(state)
         if (state.mcpDialogOpen) McpToolsDialog(state)
+        if (state.connectorsOpen) ConnectorsDialog(state)
     }
 }
 
@@ -387,6 +392,7 @@ private fun Composer(state: ChatState) {
                 Row(Modifier.fillMaxWidth().padding(start = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     AttachButton(state)
                     McpButton(state)
+                    ConnectorsButton(state)
                     DropdownChip(state.model.title, Models.all, { it.title }) { state.chooseModel(it) }
                     Spacer(Modifier.weight(1f))
                     if (state.sessionTokens > 0) {
@@ -446,6 +452,131 @@ private fun McpButton(state: ChatState) {
     }
 }
 
+/** Кнопка «Коннекторы агента» (День 20): включить/выключить MCP и локальные навыки (Skill + CLI). */
+@Composable
+private fun ConnectorsButton(state: ChatState) {
+    Surface(
+        onClick = { state.openConnectors() },
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.size(34.dp)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(Icons.Filled.Tune, "Коннекторы агента", Modifier.size(20.dp), tint = AppColors.accent)
+        }
+    }
+}
+
+/** Строка-коннектор с переключателем (как в панели коннекторов: название + описание + ползунок). */
+@Composable
+private fun ConnectorToggleRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = checked, onCheckedChange = onChange, colors = SwitchDefaults.colors(checkedTrackColor = AppColors.accent))
+    }
+}
+
+/** Результат одного прогона коннектора (MCP/Skill): токены, след вызовов и ответ. */
+@Composable
+private fun ConnectorResultView(label: String, run: ConnectorRun?) {
+    if (run == null) return
+    Surface(color = AppColors.accent.copy(alpha = 0.06f), shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            val toks = run.usage?.let { "prompt ${it.prompt} · total ${it.total}" } ?: "—"
+            Text("$label · токены: $toks", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
+            run.steps.forEach { Text(it.title, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            ExpandableText(run.reply, collapsedLines = 5)
+        }
+    }
+}
+
+/** Окно «Коннекторы агента» (День 20): переключатели MCP/Skill + сравнение на одном вопросе (токены). */
+@Composable
+private fun ConnectorsDialog(state: ChatState) {
+    AlertDialog(
+        onDismissRequest = { state.closeConnectors() },
+        confirmButton = { TextButton(onClick = { state.closeConnectors() }) { Text("Закрыть") } },
+        title = { Text("Коннекторы агента") },
+        text = {
+            Column(
+                modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    "Источники инструментов агента. MCP грузит схемы тулзов в КАЖДЫЙ запрос; Skill + CLI — локально, по требованию (дешевле по токенам).",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                ConnectorToggleRow("MCP — visa-info", "удалённый сервер: актуальные требования, поиск, дайджест", state.mcpEnabled) { state.setMcpEnabled(it) }
+                ConnectorToggleRow("MCP — server-everything (стороннее)", "локальный npx-сервер по stdio: echo, add… (второй MCP через маршрутизатор)", state.extraMcpEnabled) { state.setExtraMcpEnabled(it) }
+                HorizontalDivider()
+                ConnectorToggleRow("Skill — документы", "локально: visa-cli docs (проверка приложенных файлов)", state.skillDocsEnabled) { state.setSkillDocsEnabled(it) }
+                ConnectorToggleRow("Skill — автоулучшение промтов", "локально: анализ диалогов и точечные предложения", state.skillPromptTuneEnabled) { state.setSkillPromptTuneEnabled(it) }
+                HorizontalDivider()
+                Text("Сравнить на одном вопросе:", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                OutlinedTextField(
+                    value = state.connectorAsk,
+                    onValueChange = { state.connectorAsk = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Вопрос агенту") },
+                    maxLines = 3
+                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { state.askViaMcp() }, enabled = !state.connectorRunning) { Text("Через MCP") }
+                    TextButton(onClick = { state.askViaSkill() }, enabled = !state.connectorRunning) { Text("Через Skill") }
+                    if (state.connectorRunning) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                        state.connectorVia?.let { Text("идёт через $it…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    }
+                }
+                ConnectorResultView("MCP", state.connectorMcpRun)
+                ConnectorResultView("Skill + CLI", state.connectorSkillRun)
+                val m = state.connectorMcpRun?.usage?.prompt
+                val s = state.connectorSkillRun?.usage?.prompt
+                if (m != null && s != null) {
+                    val ratio = if (s > 0) "%.1f×".format(m.toDouble() / s) else "—"
+                    Text("Δ prompt-токенов: MCP $m vs Skill $s — MCP дороже в $ratio", fontWeight = FontWeight.SemiBold, color = AppColors.accent)
+                }
+
+                // --- День 20: навык автоулучшения промтов (предложения с подтверждением) ---
+                if (state.skillPromptTuneEnabled) {
+                    HorizontalDivider()
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Автоулучшение промтов", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { state.analyzePrompts() }, enabled = !state.promptTuneRunning) { Text("Проанализировать") }
+                        if (state.promptTuneRunning) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                    }
+                    state.promptTuneNote?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    state.promptProposals.forEach { p ->
+                        val roleName = TunableRole.byId(p.role)?.displayName ?: p.role
+                        Surface(color = AppColors.accent.copy(alpha = 0.08f), shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("💡 $roleName", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
+                                Text("Добавить: ${p.add}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                                Text("Почему: ${p.why}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    TextButton(onClick = { state.applyProposal(p) }) { Text("Применить") }
+                                    TextButton(onClick = { state.dismissProposal(p) }) { Text("Отклонить") }
+                                }
+                            }
+                        }
+                    }
+                    val pers = state.personalization
+                    if (pers.isNotEmpty()) {
+                        Text("Активная персонализация (${pers.size}):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        pers.forEach {
+                            Text("• [${TunableRole.byId(it.role)?.displayName ?: it.role}] ${it.add}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                        }
+                        TextButton(onClick = { state.resetPersonalization() }) { Text("Сбросить персонализацию") }
+                    }
+                }
+            }
+        }
+    )
+}
+
 /** Окно с результатом подключения к MCP: статус соединения и список доступных инструментов (День 16). */
 @Composable
 private fun McpToolsDialog(state: ChatState) {
@@ -474,16 +605,33 @@ private fun McpToolsDialog(state: ChatState) {
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(
-                                    if (state.mcpIsRemote) "🟢 Удалённый MCP-сервер · развёрнут, работает 24/7"
-                                    else "🟢 Локальный MCP-сервер (подпроцесс)",
-                                    color = AppColors.accent, fontWeight = FontWeight.SemiBold
-                                )
-                                Text(state.mcpServerUrl, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(
-                                    "Инструменты ниже получены С СЕРВЕРА: ${state.mcpTools.size}",
-                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                // Реально подключённые серверы — по меткам [server] в описаниях (их ставит McpRouter).
+                                val byServer = state.mcpTools.groupingBy {
+                                    Regex("^\\[(.+?)]").find(it.description.orEmpty())?.groupValues?.get(1) ?: ""
+                                }.eachCount().filterKeys { it.isNotEmpty() }
+                                if (state.extraMcpEnabled && byServer.isNotEmpty()) {
+                                    Text("🟢 Подключено MCP-серверов: ${byServer.size}", color = AppColors.accent, fontWeight = FontWeight.SemiBold)
+                                    byServer.forEach { (srv, n) ->
+                                        Text("• $srv — тулзов: $n", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    if (state.mcpEnabled && !byServer.containsKey("visa-info")) {
+                                        Text(
+                                            "⚠️ visa-info (${state.mcpServerUrl}) не ответил — нет сети/DNS до VPS. Локальные серверы работают.",
+                                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                } else {
+                                    Text(
+                                        if (state.mcpIsRemote) "🟢 Удалённый MCP-сервер · развёрнут, работает 24/7"
+                                        else "🟢 Локальный MCP-сервер (подпроцесс)",
+                                        color = AppColors.accent, fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(state.mcpServerUrl, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(
+                                        "Инструменты ниже получены С СЕРВЕРА: ${state.mcpTools.size}",
+                                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
                         state.mcpTools.forEach { tool ->
@@ -510,6 +658,19 @@ private fun McpToolsDialog(state: ChatState) {
                             }
                             state.mcpCheckResult?.let {
                                 Text(it, color = AppColors.accent, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                        if (state.extraMcpEnabled) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                TextButton(onClick = { state.testExtraMcp() }, enabled = !state.mcpExtraTesting) {
+                                    Text("Тест стороннего MCP (echo)")
+                                }
+                                if (state.mcpExtraTesting) {
+                                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                                }
+                            }
+                            state.mcpExtraTestResult?.let {
+                                Text(it, color = AppColors.accent, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
                             }
                         }
                         HorizontalDivider()

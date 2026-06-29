@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.example.adventdesktop.data.AccountStore
+import com.example.adventdesktop.data.CliSkillRunner
 import com.example.adventdesktop.data.ConfigStore
 import com.example.adventdesktop.data.DesktopConfig
 import com.example.adventdesktop.data.DocStore
@@ -12,6 +13,9 @@ import com.example.adventdesktop.data.LlmClient
 import com.example.adventdesktop.data.ModelOption
 import com.example.adventdesktop.data.Models
 import com.example.adventdesktop.data.ProfileStore
+import com.example.adventdesktop.data.PromptOverride
+import com.example.adventdesktop.data.PromptOverrideStore
+import com.example.adventdesktop.data.SkillDocs
 import com.example.adventdesktop.data.resolveLlmConfig
 import com.example.adventdesktop.domain.Account
 import com.example.adventdesktop.domain.Awaiting
@@ -27,19 +31,26 @@ import com.example.adventdesktop.domain.MemoryStore
 import com.example.adventdesktop.domain.Message
 import com.example.adventdesktop.domain.MockInterviewAgent
 import com.example.adventdesktop.domain.OfferAgent
+import com.example.adventdesktop.domain.PromptProposal
+import com.example.adventdesktop.domain.PromptTuneAnalyzer
 import com.example.adventdesktop.domain.Role
+import com.example.adventdesktop.domain.SkillEngine
+import com.example.adventdesktop.domain.SkillRunner
 import com.example.adventdesktop.domain.TaskContext
 import com.example.adventdesktop.domain.TaskOrchestrator
 import com.example.adventdesktop.domain.TaskState
 import com.example.adventdesktop.domain.TaskStep
+import com.example.adventdesktop.domain.TokenUsage
 import com.example.adventdesktop.domain.Tool
 import com.example.adventdesktop.domain.ToolGateway
 import com.example.adventdesktop.domain.UserProfile
+import com.example.adventdesktop.domain.VISA_SYSTEM_PROMPT
 import com.example.adventdesktop.domain.VisaAgent
 import com.example.adventdesktop.domain.WorkingMemory
 import com.example.adventdesktop.domain.transitionTo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
 private const val DEFAULT_TITLE = "Новая сессия"
@@ -51,6 +62,9 @@ private const val MAX_AUTO_CHAIN = 16
 
 /** День 19: один шаг пайплайна композиции MCP-инструментов — для показа цепочки и передачи данных в UI. */
 data class PipelineStep(val tool: String, val title: String, val output: String, val ok: Boolean)
+
+/** День 20: результат одного прогона коннектора (MCP или Skill) — ответ, след вызовов и токены (для сравнения). */
+data class ConnectorRun(val reply: String, val steps: List<PipelineStep>, val usage: TokenUsage?)
 
 /** Тулы пайплайна композиции (День 19). Их НЕ отдаём основному агенту-консультанту — только пайплайн-демо. */
 private val PIPELINE_TOOL_NAMES = setOf("visa_search", "visa_summarize", "save_report")
@@ -70,7 +84,7 @@ private const val PIPELINE_AGENT_PROMPT =
 class ChatState(
     private val accounts: AccountStore,
     private val configStore: ConfigStore,
-    private val toolGatewayFactory: (deepseekKey: String?, remoteUrl: String?, remoteToken: String?) -> ToolGateway,
+    private val toolGatewayFactory: (deepseekKey: String?, remoteUrl: String?, remoteToken: String?, includeVisa: Boolean, includeExtra: Boolean) -> ToolGateway,
     private val scope: CoroutineScope
 ) {
     // --- глобальное (общее для аккаунтов) ---
@@ -87,6 +101,19 @@ class ChatState(
     private var interviewAgent: MockInterviewAgent? = null
     /** Постоянный MCP-гейтвей для оркестратора (Фаза 2): инструменты интервьюеру/ассистенту. */
     private var agentTools: ToolGateway? = null
+    /** День 20: движок локального навыка (Skill + CLI) — альтернатива MCP. */
+    private var skillEngine: SkillEngine? = null
+    private var skillRunner: SkillRunner? = null
+    private var promptAnalyzer: PromptTuneAnalyzer? = null
+    private var overrideStore: PromptOverrideStore? = null
+    // День 20 (prompt-tune): объявлено ВЫШЕ init — activate() трогает promptProposals на старте.
+    var promptTuneRunning by mutableStateOf(false)
+        private set
+    var promptTuneNote by mutableStateOf<String?>(null)
+        private set
+    var promptProposals by mutableStateOf<List<PromptProposal>>(emptyList())
+        private set
+    private var lastAnalyzedMs = 0L
 
     // --- пробное собеседование (side-сессия; НЕ меняет состояние задачи) ---
     var interviewOpen by mutableStateOf(false)
@@ -166,6 +193,11 @@ class ChatState(
     var mcpPipelineMode by mutableStateOf<String?>(null)
         private set
     var mcpPipelineSteps by mutableStateOf<List<PipelineStep>>(emptyList())
+        private set
+    // День 20: тест-пинг стороннего MCP (server-everything) в окне «Инструменты MCP».
+    var mcpExtraTesting by mutableStateOf(false)
+        private set
+    var mcpExtraTestResult by mutableStateOf<String?>(null)
         private set
     private var mcpGateway: ToolGateway? = null
 
@@ -278,6 +310,9 @@ class ChatState(
         invariantStore = accounts.invariants(account.id)
         invariants = BUILT_IN_INVARIANTS + (invariantStore?.load() ?: emptyList())
         orchestrator?.invariants = invariants
+        overrideStore = accounts.promptOverrides(account.id)   // День 20: персонализация ролей этого аккаунта
+        promptProposals = emptyList()
+        applyOverrides()
         profile = profileStore?.load() ?: UserProfile(name = account.name)
         current = conversations?.latest() ?: conversations?.create(DEFAULT_TITLE)
         refreshList()
@@ -412,6 +447,34 @@ class ChatState(
         repo.save(updated)
         refreshList()
         if (ctx.awaiting == Awaiting.DOCUMENT) runStage { o, c, h, p -> o.step(c, h, p) }
+        else commentOnDocsViaSkill(saved)   // День 20: навык docs (если включён) реагирует на приложенный файл
+    }
+
+    /**
+     * День 20 — наглядность навыка: после приложения документа навык **docs** (Skill + CLI), если включён,
+     * САМ зовёт `visa-cli docs` и комментирует — что уже приложено и чего ещё не хватает по визе. Так видно,
+     * что скилл реагирует на загрузку файла (а не просто молчит).
+     */
+    private fun commentOnDocsViaSkill(justAdded: String) {
+        if (!config.skillDocsEnabled) return
+        val engine = skillEngine ?: return
+        val repo = conversations ?: return
+        scope.launch {
+            val conv = current ?: return@launch
+            val goal = "Пользователь только что приложил документ «$justAdded». Вызови `visa-cli docs check` " +
+                "(он покажет содержимое каждого файла). Сверь: на ОДНО ли лицо оформлены документы (одинаковые ФИО) " +
+                "и бьются ли даты с поездкой. Кратко скажи, что приложено и чего не хватает по визе; и ВАЖНО — " +
+                "если документы похоже на РАЗНЫХ людей или данные противоречат, ЯВНО предупреди (⚠️) и не принимай " +
+                "пакет как валидный. Не выдумывай — опирайся на извлечённый текст; если текст не извлёкся (скан), скажи это."
+            val run = runCatching { engine.run(SkillDocs.load("visa-cli"), conv.messages, goal) }.getOrNull() ?: return@launch
+            val trace = run.calls.joinToString("\n") { "🔧 ${it.command}" }
+            val text = "🧰 Навык docs (Skill + CLI)\n" + (if (trace.isNotBlank()) "$trace\n\n" else "") + run.reply
+            val base = current ?: return@launch
+            val withMsg = base.withMessage(Message(Role.Assistant, text, usage = run.usage))
+            if (current?.id == withMsg.id) current = withMsg
+            repo.save(withMsg)
+            refreshList()
+        }
     }
 
     /** Приложить файл под КОНКРЕТНЫЙ документ из «ожидают загрузки» (в т.ч. в DONE): снять его из pending. */
@@ -481,15 +544,20 @@ class ChatState(
         mcpVisaResult = null
         mcpPipelineSteps = emptyList()
         mcpPipelineMode = null
+        mcpExtraTestResult = null
         scope.launch {
             val gateway = toolGatewayFactory(
                 resolveLlmConfig(Models.byId("deepseek-chat"), config)?.apiKey,
                 config.mcpRemoteUrl.ifBlank { null }, config.mcpRemoteToken.ifBlank { null },
+                config.mcpEnabled, config.extraMcpEnabled,
             )
             mcpGateway = gateway
             runCatching {
-                gateway.connect()
-                gateway.listTools()
+                // Таймаут: первый запуск стороннего npx-сервера может качать пакет — но окно не должно висеть вечно.
+                withTimeoutOrNull(40_000) {
+                    gateway.connect()
+                    gateway.listTools()
+                } ?: error("MCP-сервер не ответил за 40 с (недоступен? первый запуск npx мог скачивать пакет — повторите).")
             }.onSuccess { mcpTools = it }
                 .onFailure { mcpError = it.message ?: "Не удалось подключиться к MCP" }
             mcpConnecting = false
@@ -530,6 +598,20 @@ class ChatState(
                 .onSuccess { mcpVisaResult = it }
                 .onFailure { mcpVisaResult = "ошибка: ${it.message}" }
             mcpVisaLoading = false
+        }
+    }
+
+    /** День 20: тест-пинг СТОРОННЕГО MCP (server-everything) через его тул `echo` — доказать, что 2-й сервер живой. */
+    fun testExtraMcp() {
+        val gateway = mcpGateway ?: return
+        if (mcpExtraTesting) return
+        mcpExtraTesting = true; mcpExtraTestResult = null
+        scope.launch {
+            val t0 = System.currentTimeMillis()
+            runCatching { gateway.callTool("echo", mapOf("message" to "ping от приложения")) }
+                .onSuccess { mcpExtraTestResult = "✓ ответ за ${System.currentTimeMillis() - t0} мс · $it" }
+                .onFailure { mcpExtraTestResult = "✗ нет ответа: ${it.message}" }
+            mcpExtraTesting = false
         }
     }
 
@@ -605,9 +687,153 @@ class ChatState(
         mcpVisaResult = null
         mcpPipelineSteps = emptyList()
         mcpPipelineMode = null
+        mcpExtraTestResult = null
         val gateway = mcpGateway
         mcpGateway = null
         scope.launch { runCatching { gateway?.close() } }
+    }
+
+    // --- День 20: коннекторы агента (переключатели MCP / Skill) + демо-прогон и сравнение токенов ---
+
+    val mcpEnabled: Boolean get() = config.mcpEnabled
+    val skillDocsEnabled: Boolean get() = config.skillDocsEnabled
+    val skillPromptTuneEnabled: Boolean get() = config.skillPromptTuneEnabled
+    val extraMcpEnabled: Boolean get() = config.extraMcpEnabled
+
+    var connectorsOpen by mutableStateOf(false)
+        private set
+    var connectorAsk by mutableStateOf("Какие документы я уже приложил?")
+    var connectorRunning by mutableStateOf(false)
+        private set
+    var connectorVia by mutableStateOf<String?>(null)
+        private set
+    var connectorMcpRun by mutableStateOf<ConnectorRun?>(null)
+        private set
+    var connectorSkillRun by mutableStateOf<ConnectorRun?>(null)
+        private set
+
+    fun openConnectors() { connectorsOpen = true; maybeAnalyzePrompts() }
+    fun closeConnectors() { connectorsOpen = false }
+
+    /** Переключатель MCP: пересобираем агента (с MCP выключенным агент идёт без MCP-схем). */
+    fun setMcpEnabled(value: Boolean) {
+        config = config.copy(mcpEnabled = value)
+        configStore.save(config)
+        rebuildAgent()
+    }
+
+    fun setSkillDocsEnabled(value: Boolean) {
+        config = config.copy(skillDocsEnabled = value)
+        configStore.save(config)
+    }
+
+    fun setSkillPromptTuneEnabled(value: Boolean) {
+        config = config.copy(skillPromptTuneEnabled = value)
+        configStore.save(config)
+    }
+
+    /** Переключатель СТОРОННЕГО MCP (server-everything): пересобираем агента — gateway станет маршрутизатором. */
+    fun setExtraMcpEnabled(value: Boolean) {
+        config = config.copy(extraMcpEnabled = value)
+        configStore.save(config)
+        rebuildAgent()
+    }
+
+    /** Спросить агента ЧЕРЕЗ MCP (схемы тулзов грузятся в запрос → tool-loop). Для сравнения с навыком. */
+    fun askViaMcp() {
+        val llm = client ?: run { error = noKeyError(); return }
+        val goal = connectorAsk.trim()
+        if (goal.isEmpty() || connectorRunning) return
+        connectorRunning = true; connectorVia = "MCP"; connectorMcpRun = null
+        scope.launch {
+            val temp = agentTools == null
+            val gw = agentTools ?: toolGatewayFactory(
+                resolveLlmConfig(Models.byId("deepseek-chat"), config)?.apiKey,
+                config.mcpRemoteUrl.ifBlank { null }, config.mcpRemoteToken.ifBlank { null },
+                true, config.extraMcpEnabled,   // «через MCP»: visa нужен для сравнения по токенам
+            )
+            runCatching {
+                val tools = gw.listTools()
+                val messages = listOf(Message(Role.System, VISA_SYSTEM_PROMPT), Message(Role.User, goal))
+                llm.complete(messages, tools) { name, args -> gw.callToolJson(name, args) }
+            }.onSuccess { resp ->
+                val steps = resp.toolResults.map { PipelineStep(it.name, "🔧 ${it.name}(${it.args.take(60)})", it.result, true) }
+                connectorMcpRun = ConnectorRun(resp.text, steps, resp.usage)
+            }.onFailure { connectorMcpRun = ConnectorRun("ошибка: ${it.message}", emptyList(), null) }
+            if (temp) runCatching { gw.close() }
+            connectorRunning = false
+        }
+    }
+
+    /** Спросить агента ЧЕРЕЗ Skill+CLI (один SKILL.md по требованию → текстовый skill-loop). */
+    fun askViaSkill() {
+        val engine = skillEngine ?: run { error = noKeyError(); return }
+        val goal = connectorAsk.trim()
+        if (goal.isEmpty() || connectorRunning) return
+        connectorRunning = true; connectorVia = "Skill"; connectorSkillRun = null
+        scope.launch {
+            runCatching {
+                engine.run(SkillDocs.load("visa-cli"), emptyList(), goal)
+            }.onSuccess { r ->
+                val steps = r.calls.map { PipelineStep("visa-cli", "[CLI] ${it.command}", it.result, true) }
+                connectorSkillRun = ConnectorRun(r.reply, steps, r.usage)
+            }.onFailure { connectorSkillRun = ConnectorRun("ошибка: ${it.message}", emptyList(), null) }
+            connectorRunning = false
+        }
+    }
+
+    // --- День 20: навык prompt-tune (самоулучшение промтов, человек в контуре) ---
+    // (состояние promptTuneRunning/promptTuneNote/promptProposals объявлено выше — до init)
+
+    /** Текущая персонализация ролей (одобренные добавки) — для показа и кнопки «Сбросить». */
+    val personalization: List<PromptOverride> get() = overrideStore?.load().orEmpty()
+
+    /** Толкнуть оверлеи в оркестратор (вызывать после смены аккаунта / применения / сброса). */
+    private fun applyOverrides() {
+        orchestrator?.promptOverrides = overrideStore?.asMap() ?: emptyMap()
+    }
+
+    /** Анализ диалогов → предложения улучшить промты (через CLI `prompt-tune collect` + LLM-суждение). */
+    fun analyzePrompts() {
+        val analyzer = promptAnalyzer ?: run { error = noKeyError(); return }
+        val runner = skillRunner ?: return
+        if (promptTuneRunning) return
+        promptTuneRunning = true; promptTuneNote = null
+        scope.launch {
+            runCatching {
+                val data = runner.run("visa-cli prompt-tune collect")
+                analyzer.analyze(data)
+            }.onSuccess { props ->
+                promptProposals = props
+                promptTuneNote = if (props.isEmpty()) "Пока нечего предложить — мало сигналов в диалогах." else null
+            }.onFailure { promptTuneNote = "Ошибка анализа: ${it.message}" }
+            lastAnalyzedMs = System.currentTimeMillis()
+            promptTuneRunning = false
+        }
+    }
+
+    /** Авто-анализ при открытии панели (перило B соблюдено: только ПРЕДЛАГАЕМ, не применяем). */
+    private fun maybeAnalyzePrompts() {
+        if (!config.skillPromptTuneEnabled || promptTuneRunning || promptProposals.isNotEmpty()) return
+        if (System.currentTimeMillis() - lastAnalyzedMs < 60_000) return
+        analyzePrompts()
+    }
+
+    /** Применить предложение (перило B — только по клику пользователя): аддитивная добавка в оверлей роли. */
+    fun applyProposal(p: PromptProposal) {
+        overrideStore?.add(p.role, p.add, p.why)
+        applyOverrides()
+        promptProposals = promptProposals - p
+    }
+
+    fun dismissProposal(p: PromptProposal) { promptProposals = promptProposals - p }
+
+    /** Перило D: сбросить всю персонализацию — мгновенный возврат к базовому поведению. */
+    fun resetPersonalization() {
+        overrideStore?.clear()
+        applyOverrides()
+        promptProposals = emptyList()
+        promptTuneNote = "Персонализация сброшена."
     }
 
     // --- агент-разведчик: предложение доп-активности (пробное собеседование) ---
@@ -904,17 +1130,25 @@ class ChatState(
 
         // MCP-инструменты для оркестратора (Фаза 2): постоянный гейтвей, лениво подключается при первом вызове.
         // День 18: если задан удалённый MCP (VPS) — агент ходит за инструментами туда (SSE+токен), иначе локально.
+        // День 20: если MCP выключен переключателем — гейтвей не создаём (агент идёт без MCP-схем).
         agentTools?.let { old -> scope.launch { runCatching { old.close() } } }
-        agentTools = toolGatewayFactory(
+        agentTools = if (config.mcpEnabled || config.extraMcpEnabled) toolGatewayFactory(
             extractorLlm?.apiKey,
             config.mcpRemoteUrl.ifBlank { null }, config.mcpRemoteToken.ifBlank { null },
-        )
+            config.mcpEnabled, config.extraMcpEnabled,
+        ) else null
 
         val llm = resolveLlmConfig(model, config)
         client = llm?.let { LlmClient(it) }
         agent = client?.let { VisaAgent(it, guard) }
         orchestrator = client?.let { TaskOrchestrator(it, guard, tools = agentTools).apply { invariants = this@ChatState.invariants } }
         interviewAgent = client?.let { MockInterviewAgent(it) }
+        // День 20: навык (Skill + CLI). CLI читает активный аккаунт сам (accounts.json), поэтому id не пробрасываем.
+        val runner = CliSkillRunner(accountId = null)
+        skillRunner = runner
+        skillEngine = client?.let { SkillEngine(it, runner) }
+        promptAnalyzer = extractorClient?.let { PromptTuneAnalyzer(it) }
+        applyOverrides()
     }
 
     private fun refreshList() {

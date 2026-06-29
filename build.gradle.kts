@@ -28,6 +28,9 @@ dependencies {
     implementation("org.slf4j:slf4j-nop:2.0.16")
     // День 18 (планировщик/дайджест): встроенная БД снимков визовых сводок (фоновый сбор по расписанию).
     implementation("org.xerial:sqlite-jdbc:3.49.1.0")
+    // День 20: чтение текста PDF для навыка docs (сверка, что документы на одного заявителя).
+    // Jar'ы лежат локально в libs/ (у gradle в этой среде нет DNS до Maven Central — см. .claude).
+    implementation(files("libs/pdfbox-2.0.31.jar", "libs/fontbox-2.0.31.jar", "libs/commons-logging-1.2.jar"))
     // День 18 (remote-транспорт MCP-сервера на VPS): Ktor-сервер + SSE + bearer-авторизация.
     implementation("io.ktor:ktor-server-core:3.1.3")
     implementation("io.ktor:ktor-server-cio:3.1.3")
@@ -71,6 +74,20 @@ tasks.register<ShadowJar>("mcpServerJar") {
     manifest { attributes["Main-Class"] = "com.example.adventdesktop.mcp.VisaMcpServerKt" }
     mergeServiceFiles()      // JDBC-драйвер и Ktor используют META-INF/services
     isZip64 = true           // в classpath есть крупные зависимости (compose/skiko)
+}
+
+// День 20: standalone CLI «Визового специалиста» (Skill + CLI). Запуск: java -jar visa-cli.jar <команда>.
+tasks.register<ShadowJar>("visaCliJar") {
+    group = "build"
+    description = "Fat-jar локального CLI (День 20, Skill + CLI)"
+    archiveBaseName.set("visa-cli")
+    archiveClassifier.set("all")
+    archiveVersion.set("")
+    from(sourceSets["main"].output)
+    configurations = listOf(project.configurations.runtimeClasspath.get())
+    manifest { attributes["Main-Class"] = "com.example.adventdesktop.cli.VisaCliMainKt" }
+    mergeServiceFiles()
+    isZip64 = true
 }
 
 compose.desktop {
