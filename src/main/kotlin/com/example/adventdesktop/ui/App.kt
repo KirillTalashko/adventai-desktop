@@ -663,7 +663,7 @@ private fun McpToolsDialog(state: ChatState) {
                         if (state.extraMcpEnabled) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 TextButton(onClick = { state.testExtraMcp() }, enabled = !state.mcpExtraTesting) {
-                                    Text("Тест стороннего MCP (echo)")
+                                    Text("Тест-прогон tools (echo, get-sum)")
                                 }
                                 if (state.mcpExtraTesting) {
                                     CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
