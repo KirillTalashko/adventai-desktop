@@ -601,16 +601,26 @@ class ChatState(
         }
     }
 
-    /** День 20: тест-пинг СТОРОННЕГО MCP (server-everything) через его тул `echo` — доказать, что 2-й сервер живой. */
+    /**
+     * День 20: тест-прогон tools СТОРОННЕГО MCP (server-everything) — вызывает два его инструмента
+     * (`echo` и `add`) и показывает вход→выход каждого. Доказывает, что инструменты второго сервера реально
+     * работают (как пайплайн-демо, но для нового MCP).
+     */
     fun testExtraMcp() {
         val gateway = mcpGateway ?: return
         if (mcpExtraTesting) return
         mcpExtraTesting = true; mcpExtraTestResult = null
         scope.launch {
             val t0 = System.currentTimeMillis()
+            val sb = StringBuilder()
             runCatching { gateway.callTool("echo", mapOf("message" to "ping от приложения")) }
-                .onSuccess { mcpExtraTestResult = "✓ ответ за ${System.currentTimeMillis() - t0} мс · $it" }
-                .onFailure { mcpExtraTestResult = "✗ нет ответа: ${it.message}" }
+                .onSuccess { sb.append("🔧 echo(\"ping от приложения\") → ").append(it.replace("\n", " ").take(120)) }
+                .onFailure { sb.append("🔧 echo → ✗ ${it.message}") }
+            sb.append('\n')
+            runCatching { gateway.callTool("get-sum", mapOf("a" to 2, "b" to 3)) }
+                .onSuccess { sb.append("🔧 get-sum(2, 3) → ").append(it.replace("\n", " ").take(120)) }
+                .onFailure { sb.append("🔧 get-sum → ✗ ${it.message}") }
+            mcpExtraTestResult = "✓ за ${System.currentTimeMillis() - t0} мс:\n$sb"
             mcpExtraTesting = false
         }
     }
