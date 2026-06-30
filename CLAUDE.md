@@ -44,6 +44,13 @@ Main.kt   окно + composition root (ручной DI)
 .\gradlew.bat packageMsi                   # установщик .msi (WiX скачивается плагином)
 ```
 
+## Навигация по коду (ast-index)
+
+Для поиска по проекту **сначала `ast-index`** (структурный, по токенам дешевле чтения файлов/grep),
+потом `Read` по найденному `file:line`. Примеры: `ast-index symbol ChatState`,
+`ast-index usages connectMcp`, `ast-index outline <file>`, `ast-index map`. Индекс держится свежим
+автоматически (хуки `PostToolUse`/`SessionStart` → `ast-index update`). Шпаргалка — `.claude/AST_INDEX.md`.
+
 ## Правила
 
 - Не тащить HTTP/Ktor/файлы в `ui` — только через доменные порты (`LlmGateway`, репозитории).

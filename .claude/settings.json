@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ast-index update",
+            "timeout": 30,
+            "statusMessage": "ast-index: обновляю индекс"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ast-index update",
+            "timeout": 60,
+            "statusMessage": "ast-index: обновляю индекс"
+          }
+        ]
+      }
+    ]
+  }
+}
