@@ -19,16 +19,33 @@ data class GatewayResponse(
 )
 
 /**
+ * Параметры генерации одного запроса к LLM (P2). Раньше `temperature` была захардкожена в клиенте —
+ * теперь её (и `max_tokens` / `reasoning_effort`) задаём ПОД ЗАДАЧУ/СТАДИЮ. `null`-поля провайдеру не
+ * отправляются (берётся его дефолт), поэтому существующие вызовы ведут себя ровно как прежде.
+ *
+ * Зачем: разным стадиям оркестра нужно разное — исполнителю/валидатору важна ТОЧНОСТЬ (низкая
+ * temperature), генератору вариантов — РАЗНООБРАЗИЕ (высокая). Понимать и управлять этими параметрами —
+ * базовый навык работы с API напрямую, а не через агрегатор, который их скрывает.
+ */
+data class LlmParams(
+    val temperature: Double? = null,
+    val maxTokens: Int? = null,
+    val reasoningEffort: String? = null,
+)
+
+/**
  * Порт к LLM — доменный слой не знает про HTTP/Ktor (Clean Architecture).
  *
  * Если переданы [tools] и [executeTool], реализация ведёт **tool-loop** (День 17, Фаза 2): отдаёт схемы
  * инструментов модели, и когда та просит вызов (`tool_calls`), исполняет его через [executeTool], скармливает
  * результат обратно и продолжает, пока модель не даст финальный ответ. Без них — обычный одиночный запрос.
+ * [params] — параметры генерации (temperature и т.п.); по умолчанию — дефолты провайдера.
  */
 interface LlmGateway {
     suspend fun complete(
         messages: List<Message>,
         tools: List<Tool> = emptyList(),
+        params: LlmParams = LlmParams(),
         executeTool: (suspend (name: String, argsJson: String) -> String)? = null,
     ): GatewayResponse
 }

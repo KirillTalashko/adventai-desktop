@@ -2,6 +2,7 @@ package com.example.adventdesktop.data
 
 import com.example.adventdesktop.domain.GatewayResponse
 import com.example.adventdesktop.domain.LlmGateway
+import com.example.adventdesktop.domain.LlmParams
 import com.example.adventdesktop.domain.Message
 import com.example.adventdesktop.domain.TokenUsage
 import com.example.adventdesktop.domain.Tool
@@ -56,6 +57,8 @@ private data class WireRequest(
     val model: String,
     val messages: List<WireMessage>,
     val temperature: Double? = null,
+    val max_tokens: Int? = null,
+    val reasoning_effort: String? = null,
     val tools: List<WireToolDef>? = null,
 )
 
@@ -90,6 +93,7 @@ class LlmClient(private val config: LlmConfig) : LlmGateway {
     override suspend fun complete(
         messages: List<Message>,
         tools: List<Tool>,
+        params: LlmParams,
         executeTool: (suspend (String, String) -> String)?,
     ): GatewayResponse {
         val wire = messages.mapTo(mutableListOf()) { WireMessage(it.role.wire, it.text) }
@@ -99,7 +103,7 @@ class LlmClient(private val config: LlmConfig) : LlmGateway {
         val results = mutableListOf<ToolResult>()
 
         repeat(MAX_TOOL_ROUNDS) {
-            val parsed = send(wire, toolDefs)
+            val parsed = send(wire, toolDefs, params)
             parsed.usage?.let { pTok += it.prompt_tokens; cTok += it.completion_tokens; tTok += it.total_tokens }
             val msg = parsed.choices.firstOrNull()?.message
             val calls = msg?.tool_calls
@@ -124,19 +128,27 @@ class LlmClient(private val config: LlmConfig) : LlmGateway {
         }
 
         // Превышен лимит раундов — финальный запрос без инструментов, чтобы модель дала ответ.
-        val finalResp = send(wire, null)
+        val finalResp = send(wire, null, params)
         finalResp.usage?.let { pTok += it.prompt_tokens; cTok += it.completion_tokens; tTok += it.total_tokens }
         val text = finalResp.choices.firstOrNull()?.message?.content?.trim()
             ?.ifEmpty { null } ?: "Не удалось получить финальный ответ после вызова инструментов."
         return GatewayResponse(text, TokenUsage(pTok, cTok, tTok), trace, results)
     }
 
-    /** Один HTTP-запрос chat/completions (с опциональными tool-схемами). */
-    private suspend fun send(wire: List<WireMessage>, toolDefs: List<WireToolDef>?): WireResponse {
+    /** Один HTTP-запрос chat/completions (с опциональными tool-схемами и параметрами генерации). */
+    private suspend fun send(wire: List<WireMessage>, toolDefs: List<WireToolDef>?, params: LlmParams): WireResponse {
         val response: HttpResponse = http.post(config.baseUrl) {
             header(HttpHeaders.Authorization, "Bearer ${config.apiKey}")
             contentType(ContentType.Application.Json)
-            setBody(WireRequest(config.model, wire, temperature = 0.4, tools = toolDefs))
+            setBody(
+                WireRequest(
+                    config.model, wire,
+                    temperature = params.temperature ?: DEFAULT_TEMPERATURE,
+                    max_tokens = params.maxTokens,
+                    reasoning_effort = params.reasoningEffort,
+                    tools = toolDefs,
+                )
+            )
         }
         if (!response.status.isSuccess()) {
             val raw = response.bodyAsText()
@@ -159,5 +171,8 @@ class LlmClient(private val config: LlmConfig) : LlmGateway {
     private companion object {
         /** Предел раундов tool-loop (защита от зацикливания вызовов инструментов). */
         const val MAX_TOOL_ROUNDS = 4
+
+        /** Дефолтная temperature, если стадия/вызов её не задал (как было до P2). */
+        const val DEFAULT_TEMPERATURE = 0.4
     }
 }
