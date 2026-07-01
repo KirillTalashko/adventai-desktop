@@ -750,6 +750,12 @@ class ChatState(
         rebuildAgent()
     }
 
+    /** Режим разработчика: только видимость инженерных витрин (без пересборки агента). */
+    fun setDeveloperMode(value: Boolean) {
+        config = config.copy(developerMode = value)
+        configStore.save(config)
+    }
+
     /** Спросить агента ЧЕРЕЗ MCP (схемы тулзов грузятся в запрос → tool-loop). Для сравнения с навыком. */
     fun askViaMcp() {
         val llm = client ?: run { error = noKeyError(); return }

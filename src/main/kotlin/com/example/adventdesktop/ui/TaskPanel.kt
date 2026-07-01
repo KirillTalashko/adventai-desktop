@@ -100,7 +100,7 @@ fun TaskInlineActions(state: ChatState) {
 private fun DoneInline(state: ChatState, ctx: TaskContext) {
     Column(Modifier.padding(start = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (ctx.pending.isEmpty()) {
-            Surface(color = AppColors.accent.copy(alpha = 0.14f), shape = RoundedCornerShape(10.dp)) {
+            Surface(color = AppColors.accent.copy(alpha = 0.14f), shape = RoundedCornerShape(Radii.sm)) {
                 Text(
                     "✓ Задача завершена",
                     Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
@@ -167,7 +167,7 @@ private fun ContinueInline(state: ChatState, ctx: TaskContext) {
 private fun OfferCard(text: String, onAccept: () -> Unit, onDecline: () -> Unit) {
     Surface(
         color = AppColors.accent.copy(alpha = 0.10f),
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(Radii.sm),
         border = BorderStroke(1.dp, AppColors.accent.copy(alpha = 0.4f)),
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -232,7 +232,7 @@ private fun OptionRow(label: String, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(Radii.sm),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -250,7 +250,7 @@ private fun SmallPrimary(label: String, enabled: Boolean = true, onClick: () -> 
     Surface(
         onClick = onClick,
         enabled = enabled,
-        shape = RoundedCornerShape(9.dp),
+        shape = RoundedCornerShape(Radii.sm),
         color = if (enabled) AppColors.accent else MaterialTheme.colorScheme.outlineVariant
     ) {
         Text(
@@ -265,7 +265,7 @@ private fun SmallPrimary(label: String, enabled: Boolean = true, onClick: () -> 
 
 @Composable
 private fun SmallGhost(label: String, onClick: () -> Unit) {
-    Surface(onClick = onClick, shape = RoundedCornerShape(9.dp), color = Color.Transparent) {
+    Surface(onClick = onClick, shape = RoundedCornerShape(Radii.sm), color = Color.Transparent) {
         Text(
             label,
             Modifier.padding(horizontal = 10.dp, vertical = 7.dp),

@@ -35,6 +35,8 @@ import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.WarningAmber
 import com.example.adventdesktop.domain.TunableRole
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -97,7 +99,7 @@ fun App(state: ChatState) {
     var showProfile by remember { mutableStateOf(false) }
     var showInvariants by remember { mutableStateOf(false) }
 
-    AdventTheme {
+    AdventTheme(dark = state.config.darkTheme) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             if (state.needsOnboarding) {
                 Onboarding(state)
@@ -135,12 +137,12 @@ private fun Sidebar(
     onInvariants: () -> Unit
 ) {
     Column(
-        modifier = modifier.background(AppColors.sidebar).padding(12.dp),
+        modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Box(
-                Modifier.size(30.dp).background(LogoBg, RoundedCornerShape(9.dp)),
+                Modifier.size(30.dp).background(LogoBg, RoundedCornerShape(Radii.sm)),
                 contentAlignment = Alignment.Center
             ) { Text("В", color = LogoFg, fontWeight = FontWeight.Bold) }
             Text("Визовый специалист", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
@@ -151,7 +153,7 @@ private fun Sidebar(
         Surface(
             onClick = { state.newConversation() },
             color = AppColors.accent,
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(Radii.md),
             modifier = Modifier.fillMaxWidth()
         ) {
             Row(
@@ -173,7 +175,7 @@ private fun Sidebar(
                 Surface(
                     onClick = { state.open(meta.id) },
                     color = if (active) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(Radii.sm),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(Modifier.padding(start = 10.dp, end = 4.dp, top = 7.dp, bottom = 7.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -186,7 +188,7 @@ private fun Sidebar(
                             color = if (active) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
                         )
                         Box(
-                            Modifier.size(22.dp).clip(RoundedCornerShape(6.dp)).clickable { state.deleteConversation(meta.id) },
+                            Modifier.size(22.dp).clip(RoundedCornerShape(Radii.xs)).clickable { state.deleteConversation(meta.id) },
                             contentAlignment = Alignment.Center
                         ) { Icon(Icons.Filled.Close, "удалить", Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) }
                     }
@@ -195,7 +197,7 @@ private fun Sidebar(
         }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        SidebarButton("Инварианты", null, onInvariants, Modifier.fillMaxWidth())
+        SidebarButton("Правила", null, onInvariants, Modifier.fillMaxWidth())
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SidebarButton("Память", null, onMemory, Modifier.weight(1f))
             SidebarButton("Настройки", Icons.Filled.Settings, onSettings, Modifier.weight(1f))
@@ -211,7 +213,7 @@ private fun AccountSwitcher(state: ChatState, onProfile: () -> Unit) {
         Surface(
             onClick = { open = true },
             color = MaterialTheme.colorScheme.surface,
-            shape = RoundedCornerShape(10.dp),
+            shape = RoundedCornerShape(Radii.sm),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -276,7 +278,7 @@ private fun SidebarButton(label: String, icon: androidx.compose.ui.graphics.vect
     Surface(
         onClick = onClick,
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(Radii.sm),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = modifier
     ) {
@@ -308,7 +310,12 @@ private fun ChatPane(state: ChatState, modifier: Modifier) {
                 val listState = rememberLazyListState()
                 val taskActive = state.task != null
                 val count = state.messages.size + if (taskActive) 2 else if (state.loading) 1 else 0
-                LaunchedEffect(count, state.task?.awaiting, state.loading) { if (count > 0) listState.animateScrollToItem(count - 1) }
+                LaunchedEffect(count, state.task?.awaiting, state.loading) {
+                    if (count > 0) {
+                        if (state.config.reducedMotion) listState.scrollToItem(count - 1)
+                        else listState.animateScrollToItem(count - 1)
+                    }
+                }
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
@@ -349,7 +356,7 @@ private fun EmptyState(state: ChatState) {
                 Surface(
                     onClick = { state.input = hint; state.submitComposer() },
                     color = MaterialTheme.colorScheme.surface,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(Radii.md),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                 ) {
                     Text(hint, Modifier.padding(horizontal = 12.dp, vertical = 8.dp), style = MaterialTheme.typography.bodyMedium)
@@ -363,7 +370,7 @@ private fun EmptyState(state: ChatState) {
 private fun Composer(state: ChatState) {
     Column(Modifier.padding(horizontal = 20.dp).padding(top = 8.dp, bottom = 14.dp)) {
         Surface(
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(Radii.lg),
             color = MaterialTheme.colorScheme.surface,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
             modifier = Modifier.fillMaxWidth()
@@ -391,8 +398,11 @@ private fun Composer(state: ChatState) {
                 )
                 Row(Modifier.fillMaxWidth().padding(start = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     AttachButton(state)
-                    McpButton(state)
-                    ConnectorsButton(state)
+                    // Инженерные витрины (MCP/коннекторы) — только в режиме разработчика (Настройки).
+                    if (state.config.developerMode) {
+                        McpButton(state)
+                        ConnectorsButton(state)
+                    }
                     DropdownChip(state.model.title, Models.all, { it.title }) { state.chooseModel(it) }
                     Spacer(Modifier.weight(1f))
                     if (state.sessionTokens > 0) {
@@ -483,7 +493,7 @@ private fun ConnectorToggleRow(title: String, subtitle: String, checked: Boolean
 @Composable
 private fun ConnectorResultView(label: String, run: ConnectorRun?) {
     if (run == null) return
-    Surface(color = AppColors.accent.copy(alpha = 0.06f), shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
+    Surface(color = AppColors.accent.copy(alpha = 0.06f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             val toks = run.usage?.let { "prompt ${it.prompt} · total ${it.total}" } ?: "—"
             Text("$label · токены: $toks", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
@@ -551,9 +561,9 @@ private fun ConnectorsDialog(state: ChatState) {
                     state.promptTuneNote?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     state.promptProposals.forEach { p ->
                         val roleName = TunableRole.byId(p.role)?.displayName ?: p.role
-                        Surface(color = AppColors.accent.copy(alpha = 0.08f), shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        Surface(color = AppColors.accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text("💡 $roleName", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
+                                Text(roleName, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
                                 Text("Добавить: ${p.add}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
                                 Text("Почему: ${p.why}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -601,7 +611,7 @@ private fun McpToolsDialog(state: ChatState) {
                     else -> {
                         Surface(
                             color = AppColors.accent.copy(alpha = 0.10f),
-                            shape = RoundedCornerShape(10.dp),
+                            shape = RoundedCornerShape(Radii.sm),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -610,22 +620,31 @@ private fun McpToolsDialog(state: ChatState) {
                                     Regex("^\\[(.+?)]").find(it.description.orEmpty())?.groupValues?.get(1) ?: ""
                                 }.eachCount().filterKeys { it.isNotEmpty() }
                                 if (state.extraMcpEnabled && byServer.isNotEmpty()) {
-                                    Text("🟢 Подключено MCP-серверов: ${byServer.size}", color = AppColors.accent, fontWeight = FontWeight.SemiBold)
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Icon(Icons.Outlined.CheckCircle, null, Modifier.size(14.dp), tint = AppColors.accent)
+                                        Text("Подключено MCP-серверов: ${byServer.size}", color = AppColors.accent, fontWeight = FontWeight.SemiBold)
+                                    }
                                     byServer.forEach { (srv, n) ->
                                         Text("• $srv — тулзов: $n", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                     if (state.mcpEnabled && !byServer.containsKey("visa-info")) {
-                                        Text(
-                                            "⚠️ visa-info (${state.mcpServerUrl}) не ответил — нет сети/DNS до VPS. Локальные серверы работают.",
-                                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error
-                                        )
+                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            Icon(Icons.Outlined.WarningAmber, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.error)
+                                            Text(
+                                                "visa-info (${state.mcpServerUrl}) не ответил — нет сети/DNS до VPS. Локальные серверы работают.",
+                                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error
+                                            )
+                                        }
                                     }
                                 } else {
-                                    Text(
-                                        if (state.mcpIsRemote) "🟢 Удалённый MCP-сервер · развёрнут, работает 24/7"
-                                        else "🟢 Локальный MCP-сервер (подпроцесс)",
-                                        color = AppColors.accent, fontWeight = FontWeight.SemiBold
-                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Icon(Icons.Outlined.CheckCircle, null, Modifier.size(14.dp), tint = AppColors.accent)
+                                        Text(
+                                            if (state.mcpIsRemote) "Удалённый MCP-сервер · развёрнут, работает 24/7"
+                                            else "Локальный MCP-сервер (подпроцесс)",
+                                            color = AppColors.accent, fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
                                     Text(state.mcpServerUrl, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     Text(
                                         "Инструменты ниже получены С СЕРВЕРА: ${state.mcpTools.size}",
@@ -744,10 +763,10 @@ private fun McpToolsDialog(state: ChatState) {
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             TextButton(onClick = { state.runPipelineDeterministic() }, enabled = !state.mcpPipelineRunning) {
-                                Text("▶ Запустить (по коду)")
+                                Text("Запустить (по коду)")
                             }
                             TextButton(onClick = { state.runPipelineAgent() }, enabled = !state.mcpPipelineRunning) {
-                                Text("🤖 Запустить (агент)")
+                                Text("Запустить (агент)")
                             }
                             if (state.mcpPipelineRunning) {
                                 CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
@@ -760,7 +779,7 @@ private fun McpToolsDialog(state: ChatState) {
                             val tint = if (step.ok) AppColors.accent else MaterialTheme.colorScheme.error
                             Surface(
                                 color = tint.copy(alpha = 0.08f),
-                                shape = RoundedCornerShape(8.dp),
+                                shape = RoundedCornerShape(Radii.xs),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -802,7 +821,7 @@ private fun ExpandableText(text: String, collapsedLines: Int = 6) {
             contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
         ) {
             Text(
-                if (expanded) "Свернуть ▲" else "Развернуть весь ответ ▼",
+                if (expanded) "Свернуть" else "Развернуть весь ответ",
                 style = MaterialTheme.typography.labelSmall,
                 color = AppColors.accent,
             )
@@ -817,7 +836,7 @@ private fun <T> DropdownChip(label: String, items: List<T>, itemLabel: (T) -> St
         Surface(
             onClick = { open = true },
             color = MaterialTheme.colorScheme.surfaceVariant,
-            shape = RoundedCornerShape(10.dp)
+            shape = RoundedCornerShape(Radii.sm)
         ) {
             Row(Modifier.padding(start = 10.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
@@ -836,7 +855,7 @@ private fun <T> DropdownChip(label: String, items: List<T>, itemLabel: (T) -> St
 private fun MessageView(message: Message) {
     if (message.role == Role.User) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(16.dp), modifier = Modifier.widthIn(max = 560.dp)) {
+            Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(Radii.lg), modifier = Modifier.widthIn(max = 560.dp)) {
                 Text(message.text, Modifier.padding(horizontal = 14.dp, vertical = 10.dp), color = MaterialTheme.colorScheme.onSurface)
             }
         }
@@ -865,14 +884,14 @@ private fun TokenLine(usage: TokenUsage) {
 
 @Composable
 private fun ChecklistView(items: List<Pair<String, String>>) {
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(12.dp)) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(Radii.md)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             items.forEach { (name, status) ->
                 val color = statusColor(status)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Box(Modifier.size(10.dp).background(color, CircleShape))
                     Text(name, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurface)
-                    Surface(color = color.copy(alpha = 0.14f), shape = RoundedCornerShape(8.dp)) {
+                    Surface(color = color.copy(alpha = 0.14f), shape = RoundedCornerShape(Radii.xs)) {
                         Text(status, Modifier.padding(horizontal = 8.dp, vertical = 2.dp), color = color, style = MaterialTheme.typography.labelMedium)
                     }
                 }

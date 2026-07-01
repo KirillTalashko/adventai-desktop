@@ -112,6 +112,11 @@ internal data class AppConfigDto(
     val skillPromptTuneEnabled: Boolean = false,
     // День 20: подключить СТОРОННЕЕ MCP (npx @modelcontextprotocol/server-everything) через маршрутизатор.
     val extraMcpEnabled: Boolean = false,
+    // Режим разработчика: показывать инженерные витрины (MCP/коннекторы/демо-пайплайн).
+    val developerMode: Boolean = false,
+    // Оформление (аудит Рамса #9): тёмная тема и reduced-motion.
+    val darkTheme: Boolean = false,
+    val reducedMotion: Boolean = false,
 )
 
 // --- мапперы DTO <-> domain ---
