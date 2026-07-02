@@ -42,6 +42,7 @@ import com.example.adventdesktop.domain.TaskState
 import com.example.adventdesktop.domain.TaskStep
 import com.example.adventdesktop.domain.TokenUsage
 import com.example.adventdesktop.domain.Tool
+import com.example.adventdesktop.domain.ToolCallGuard
 import com.example.adventdesktop.domain.ToolGateway
 import com.example.adventdesktop.domain.UserProfile
 import com.example.adventdesktop.domain.VISA_SYSTEM_PROMPT
@@ -1151,7 +1152,7 @@ class ChatState(
         val llm = resolveLlmConfig(model, config)
         client = llm?.let { LlmClient(it) }
         agent = client?.let { VisaAgent(it, guard) }
-        orchestrator = client?.let { TaskOrchestrator(it, guard, tools = agentTools).apply { invariants = this@ChatState.invariants } }
+        orchestrator = client?.let { TaskOrchestrator(it, guard, tools = agentTools, toolGuard = ToolCallGuard(), serviceGateway = extractorClient).apply { invariants = this@ChatState.invariants } }
         interviewAgent = client?.let { MockInterviewAgent(it) }
         // День 20: навык (Skill + CLI). CLI читает активный аккаунт сам (accounts.json), поэтому id не пробрасываем.
         val runner = CliSkillRunner(accountId = null)

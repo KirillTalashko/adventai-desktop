@@ -1,5 +1,9 @@
 package com.example.adventdesktop.domain
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+
 /**
  * Результат одного хода автомата: ответ агента стадии (уже очищенный от управляющих тегов) + новое
  * состояние. [cancel] — простой вопрос, не требующий процесса: ответ дан, режим задачи можно снять.
@@ -18,7 +22,21 @@ class TaskOrchestrator(
     private val guard: InvariantGuard? = null,
     private val basePrompt: String = VISA_SYSTEM_PROMPT,
     private val windowSize: Int = 12,
-    private val tools: ToolGateway? = null
+    private val tools: ToolGateway? = null,
+    /** Досмотр исходящих tool-calls ПЕРЕД исполнением (защита от «логических бомб»). null = без досмотра. */
+    private val toolGuard: ToolCallGuard? = null,
+    /**
+     * P3 «модель-под-задачу»: дешёвый служебный шлюз для МЕХАНИЧЕСКИХ под-задач (извлечение досье), чтобы
+     * не жечь основную (выбранную пользователем) модель на рутине. null → используется основной [gateway].
+     * Пользователь-видимые стадии (интервью/план/исполнение/валидация) всегда на основном [gateway].
+     */
+    private val serviceGateway: LlmGateway? = null,
+    /**
+     * P5 «рой агентов»: число параллельных валидаторов-проверяющих (каждый со своим ракурсом) на стадии
+     * VALIDATION. >1 включает консилиум на дешёвом [serviceGateway]; 1 (или нет serviceGateway) — обычный
+     * одиночный валидатор. Консилиум перекрёстно ловит то, что один проверяющий упускает.
+     */
+    private val consiliumSize: Int = 3,
 ) {
     /** Активные инварианты аккаунта (День 14) — инжектятся во все стадийные запросы. Обновляет [ChatState]. */
     var invariants: List<Invariant> = emptyList()
@@ -30,8 +48,11 @@ class TaskOrchestrator(
      */
     var promptOverrides: Map<String, List<String>> = emptyMap()
 
-    /** Писарь досье (День 18): детерминированно заполняет [CaseFile] из слов пользователя на стадии INTAKE. */
-    private val caseExtractor = CaseExtractor(gateway)
+    /**
+     * Писарь досье (День 18): детерминированно заполняет [CaseFile] из слов пользователя на стадии INTAKE.
+     * P3: механическое извлечение → на дешёвом [serviceGateway] (если задан), иначе на основном.
+     */
+    private val caseExtractor = CaseExtractor(serviceGateway ?: gateway)
     /**
      * INTAKE: интервьюер. Заполняет [CaseFile] из слов пользователя ([parseCase]); готовность к плану
      * решает КОД ([CaseFile.isReadyForPlan]), а не флака-тег. `[SIMPLE]` → инфо/привет/недопустимо (кейс
@@ -135,7 +156,7 @@ class TaskOrchestrator(
     /** PLANNING (1/2): планировщик предлагает 4 подхода → выбор пользователя ([Awaiting.CHOICE]). */
     suspend fun proposeOptions(ctx0: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatching {
         val ctx = ensureResearch(ctx0)   // справка (актуальные данные + ссылки) — один раз, перед планированием
-        val resp = call(PLANNER_OPTIONS, ctx, history, profile, "Предложи 4 разных подхода. Верни блок [OPTIONS]…[/OPTIONS].", roleId = TunableRole.PLANNER.id)
+        val resp = call(PLANNER_OPTIONS, ctx, history, profile, "Предложи 4 разных подхода. Верни блок [OPTIONS]…[/OPTIONS].", roleId = TunableRole.PLANNER.id, params = LlmParams(temperature = TEMP_CREATIVE))
         val options = parseList(resp.text, "OPTIONS")
         val next = if (options.size < 2) ctx   // не распознано — остаёмся, можно повторить
         else ctx.copy(options = options, awaiting = Awaiting.CHOICE, prompt = "Выберите подход к решению")
@@ -176,7 +197,7 @@ class TaskOrchestrator(
             "Не возвращайся к прошлым шагам и не забегай вперёд. Используй [СПРАВКА ПО ВИЗЕ] и приводи официальные ССЫЛКИ. " +
             "Заверши строкой [STEP_RESULT] <что сделано по ЭТОМУ шагу>. " +
             "Если нужен документ пользователя — добавь [NEED_DOC] <короткий ярлык, 2–4 слова>."
-        val resp = call(EXECUTOR, ctx, history, profile, instruction, historyLimit = 6, guarded = true, useTools = true, roleId = TunableRole.EXECUTOR.id)
+        val resp = call(EXECUTOR, ctx, history, profile, instruction, historyLimit = 6, guarded = true, useTools = true, roleId = TunableRole.EXECUTOR.id, params = LlmParams(temperature = TEMP_PRECISE))
         val needDoc = parseTagged(resp.text, "NEED_DOC")
         val result = parseTagged(resp.text, "STEP_RESULT") ?: "шаг ${ctx.step + 1} выполнен"
         // Документы НЕ блокируют: нужный файл уходит в «понадобится позже», шаг всегда продвигается (#3, #4).
@@ -199,9 +220,57 @@ class TaskOrchestrator(
         return (pending + label).takeLast(8)
     }
 
-    private suspend fun validate(ctx: TaskContext, history: List<Message>, profile: UserProfile?): TaskStep {
-        val resp = call(VALIDATOR, ctx, history, profile, "Проверь результат. Недостающие документы пользователя (он приложит позже) — НЕ повод для revise. Заверши строкой [VERDICT] pass | revise: …", roleId = TunableRole.VALIDATOR.id)
+    /** VALIDATION: консилиум (рой проверяющих) если включён и есть служебный шлюз, иначе одиночный валидатор. */
+    private suspend fun validate(ctx: TaskContext, history: List<Message>, profile: UserProfile?): TaskStep =
+        if (consiliumSize > 1 && serviceGateway != null) consiliumValidate(ctx, history, profile)
+        else validateSingle(ctx, history, profile)
+
+    /** Одиночный валидатор (исходное поведение). */
+    private suspend fun validateSingle(ctx: TaskContext, history: List<Message>, profile: UserProfile?): TaskStep {
+        val resp = call(VALIDATOR, ctx, history, profile, "Проверь результат. Недостающие документы пользователя (он приложит позже) — НЕ повод для revise. Заверши строкой [VERDICT] pass | revise: …", roleId = TunableRole.VALIDATOR.id, params = LlmParams(temperature = TEMP_PRECISE))
         val verdict = parseTagged(resp.text, "VERDICT").orEmpty()
+        return applyVerdict(ctx, verdict, reconcileChecklist(clean(resp.text), ctx.docs), resp.usage)
+    }
+
+    /**
+     * P5 «рой агентов»: запускаем [consiliumSize] валидаторов ПАРАЛЛЕЛЬНО, каждый со своим РАКУРСОМ
+     * ([VALIDATOR_ANGLES]), на дешёвом служебном шлюзе. Сводим детерминированно: хоть один обоснованный
+     * revise → доработка с объединённым фидбэком; иначе pass. Перекрёстная проверка ловит больше, чем один.
+     */
+    private suspend fun consiliumValidate(ctx: TaskContext, history: List<Message>, profile: UserProfile?): TaskStep {
+        val gw = serviceGateway ?: gateway
+        val state = ctx.renderStateBlock()
+        val angles = VALIDATOR_ANGLES.take(consiliumSize.coerceAtMost(VALIDATOR_ANGLES.size))
+        val verdicts = coroutineScope {
+            angles.map { angle ->
+                async {
+                    val sys = buildString {
+                        append(basePrompt)
+                        append("\n\nСегодня: ").append(java.time.LocalDate.now())
+                        append("\n\n").append(CONDUCTOR)
+                        append("\n\n").append(VALIDATOR)
+                        append("\n\n[ТВОЙ РАКУРС ПРОВЕРКИ] ").append(angle)
+                        append("\n\n").append(state)
+                    }
+                    val msgs = listOf(Message(Role.System, sys)) + history.takeLast(windowSize) +
+                        Message(Role.User, "Проверь результат СТРОГО со своего ракурса. Недостающие документы пользователя (приложит позже) — НЕ повод для revise. Заверши строкой [VERDICT] pass | revise: <что доработать>.")
+                    val text = runCatching { gw.complete(msgs, params = LlmParams(temperature = TEMP_PRECISE)) }.getOrNull()?.text.orEmpty()
+                    parseTagged(text, "VERDICT").orEmpty()
+                }
+            }.awaitAll()
+        }
+        val revises = verdicts.filter { it.startsWith("revise", ignoreCase = true) }
+            .map { it.substringAfter(':', "").trim() }.filter { it.isNotEmpty() }
+        val merged = if (revises.isNotEmpty()) "revise: " + revises.joinToString("; ").take(600) else "pass"
+        val display = if (revises.isEmpty())
+            "Консилиум из ${verdicts.size} проверяющих: разногласий нет, проверка пройдена."
+        else
+            "Консилиум из ${verdicts.size} проверяющих: ${revises.size} за доработку.\n• " + revises.joinToString("\n• ")
+        return applyVerdict(ctx, merged, display, null)
+    }
+
+    /** Применить вердикт (pass/revise) к автомату — общая логика для одиночного валидатора и консилиума. */
+    private fun applyVerdict(ctx: TaskContext, verdict: String, displayText: String, usage: TokenUsage?): TaskStep {
         val feedback = verdict.substringAfter(':', "").trim()
         val next = when {
             verdict.startsWith("pass", ignoreCase = true) -> ctx.copy(note = "").transitionTo(TaskState.DONE)
@@ -212,7 +281,7 @@ class TaskOrchestrator(
             verdict.startsWith("revise", ignoreCase = true) -> ctx.copy(note = feedback).transitionTo(TaskState.DONE)
             else -> ctx
         }
-        return TaskStep(AgentReply(reconcileChecklist(clean(resp.text), ctx.docs), resp.usage), next)
+        return TaskStep(AgentReply(displayText, usage), next)
     }
 
     /** Ответ на вопрос/реплику пользователя в контексте задачи БЕЗ изменения автомата (#2). Распознаёт разворот. */
@@ -267,6 +336,7 @@ class TaskOrchestrator(
         guarded: Boolean = false,
         useTools: Boolean = false,
         roleId: String? = null,
+        params: LlmParams = LlmParams(temperature = TEMP_DEFAULT),
     ): GatewayResponse {
         val system = buildString {
             append(basePrompt)
@@ -307,14 +377,26 @@ class TaskOrchestrator(
             runCatching { gw.listTools() }.getOrDefault(emptyList()).filterNot { it.name in PIPELINE_TOOLS }
         else emptyList()
         val executeTool: (suspend (String, String) -> String)? =
-            if (gw != null && toolList.isNotEmpty()) { name, args -> gw.callToolJson(name, args) } else null
-        var resp = gateway.complete(messages, toolList, executeTool)
+            if (gw != null && toolList.isNotEmpty()) { name, args ->
+                // Досмотр ПЕРЕД исполнением: «логическую бомбу» не вызываем, а возвращаем модели отказ —
+                // она увидит причину и переформулирует/откажется, вместо слепого исполнения опасных args.
+                when (val v = toolGuard?.inspect(name, args) ?: ToolCallVerdict.Allow) {
+                    is ToolCallVerdict.Allow -> gw.callToolJson(name, args)
+                    is ToolCallVerdict.Block ->
+                        "ОТКЛОНЕНО стражем безопасности: ${v.reason}. Инструмент НЕ вызван — переформулируй запрос без исполняемых конструкций."
+                }
+            } else null
+        var resp = gateway.complete(messages, toolList, params, executeTool)
         // Двойная защита (День 14): на пользовательских стадиях страж проверяет ответ; при нарушении —
         // одна перегенерация в обоснованный отказ. Инжект инвариантов выше — первый рубеж, страж — второй.
         if (guarded && guard != null) {
             val violation = guard.check(resp.text, invariants)
             if (violation != null) {
-                resp = gateway.complete(messages + Message(Role.Assistant, resp.text) + Message(Role.User, guardFix(violation)))
+                // Переписать в отказ — задача на точность: низкая temperature.
+                resp = gateway.complete(
+                    messages + Message(Role.Assistant, resp.text) + Message(Role.User, guardFix(violation)),
+                    params = LlmParams(temperature = TEMP_PRECISE),
+                )
             }
         }
         return resp
@@ -366,8 +448,23 @@ class TaskOrchestrator(
     }
 
     private companion object {
+        /**
+         * Температуры под стадии (P2): точность для исполнителя/валидатора/отказа, разнообразие — для
+         * генерации вариантов, нейтральная по умолчанию. Управляем параметром явно, а не хардкодом в клиенте.
+         */
+        const val TEMP_DEFAULT = 0.4
+        const val TEMP_PRECISE = 0.2
+        const val TEMP_CREATIVE = 0.7
+
         /** Максимум возвратов валидатора на доработку (защита от петли revise). */
         const val MAX_REVISES = 1
+
+        /** P5: ракурсы консилиума — каждый проверяющий смотрит со своей стороны (перекрёстная проверка). */
+        val VALIDATOR_ANGLES = listOf(
+            "ПОЛНОТА — все ли необходимые шаги и документы учтены, ничего существенного не пропущено.",
+            "СООТВЕТСТВИЕ ДОСЬЕ — совпадает ли результат со страной, целью, датами и числом заявителей из [ДОСЬЕ].",
+            "СРОКИ И РИСКИ — реалистичны ли сроки относительно дат поездки и учтены ли риски отказа.",
+        )
 
         /** Предел длины сохраняемого синтеза [TaskContext.research] в [STATE] (баланс «ссылки сохранены / токены»). */
         const val RESEARCH_CAP = 3500
