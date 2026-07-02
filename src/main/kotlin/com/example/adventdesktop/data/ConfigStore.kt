@@ -21,6 +21,9 @@ data class DesktopConfig(
     // Оформление (аудит Рамса #9): тёмная тема и «меньше анимаций» (reduced-motion). По умолчанию — светлая, анимации вкл.
     val darkTheme: Boolean = false,
     val reducedMotion: Boolean = false,
+    // HTTP-прокси для всех запросов приложения (LLM + удалённый MCP). Для сетей с локальным туннелем,
+    // где прямой выход/DNS закрыты (напр. http://127.0.0.1:10809). Пусто → прямое соединение.
+    val httpProxy: String = "",
 ) {
     fun keyFor(provider: String): String = if (provider == "deepseek") deepseekKey else openrouterKey
 }
@@ -52,6 +55,7 @@ class ConfigStore(private val store: FileStore) {
             developerMode = dto.developerMode,
             darkTheme = dto.darkTheme,
             reducedMotion = dto.reducedMotion,
+            httpProxy = dto.httpProxy.ifBlank { System.getenv("HTTPS_PROXY") ?: System.getenv("HTTP_PROXY").orEmpty() }.trim(),
         )
     }
 
@@ -72,6 +76,7 @@ class ConfigStore(private val store: FileStore) {
                     developerMode = config.developerMode,
                     darkTheme = config.darkTheme,
                     reducedMotion = config.reducedMotion,
+                    httpProxy = config.httpProxy,
                 )
             )
         )

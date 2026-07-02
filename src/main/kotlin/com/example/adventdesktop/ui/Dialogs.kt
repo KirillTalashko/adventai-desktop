@@ -62,6 +62,7 @@ fun SettingsDialog(state: ChatState, onClose: () -> Unit) {
     var devMode by remember { mutableStateOf(state.config.developerMode) }
     var darkTheme by remember { mutableStateOf(state.config.darkTheme) }
     var reducedMotion by remember { mutableStateOf(state.config.reducedMotion) }
+    var proxy by remember { mutableStateOf(state.config.httpProxy) }
 
     AlertDialog(
         onDismissRequest = onClose,
@@ -85,6 +86,16 @@ fun SettingsDialog(state: ChatState, onClose: () -> Unit) {
                 )
                 Text("Модель по умолчанию", style = MaterialTheme.typography.labelLarge)
                 ModelSelector(model) { model = it }
+                OutlinedTextField(
+                    value = proxy, onValueChange = { proxy = it },
+                    label = { Text("HTTP-прокси (необязательно)") },
+                    placeholder = { Text("http://127.0.0.1:10809") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "Для сетей с локальным туннелем, где прямой выход/DNS закрыты. Пусто — прямое соединение.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 SettingToggle("Тёмная тема", "Тёмное оформление приложения.", darkTheme) { darkTheme = it }
                 SettingToggle("Меньше анимаций", "Мгновенная прокрутка без плавных переходов.", reducedMotion) { reducedMotion = it }
                 SettingToggle("Режим разработчика", "Показывать инженерные витрины: инструменты MCP, коннекторы, демо-пайплайн.", devMode) { devMode = it }
@@ -96,6 +107,7 @@ fun SettingsDialog(state: ChatState, onClose: () -> Unit) {
                     state.config.copy(
                         openrouterKey = orKey.trim(), deepseekKey = dsKey.trim(), modelId = model.id,
                         developerMode = devMode, darkTheme = darkTheme, reducedMotion = reducedMotion,
+                        httpProxy = proxy.trim(),
                     )
                 )
                 onClose()

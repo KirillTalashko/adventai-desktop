@@ -117,6 +117,8 @@ internal data class AppConfigDto(
     // Оформление (аудит Рамса #9): тёмная тема и reduced-motion.
     val darkTheme: Boolean = false,
     val reducedMotion: Boolean = false,
+    // HTTP-прокси для запросов приложения (LLM + удалённый MCP); пусто → прямое соединение.
+    val httpProxy: String = "",
 )
 
 // --- мапперы DTO <-> domain ---

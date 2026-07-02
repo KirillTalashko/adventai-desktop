@@ -88,6 +88,8 @@ class LlmClient(private val config: LlmConfig) : LlmGateway {
             requestTimeoutMillis = 120_000
             connectTimeoutMillis = 30_000
         }
+        // На сетях с локальным туннелем (прямой выход/DNS закрыты) ходим через прокси из настроек; иначе — прямо.
+        engine { HttpProxy.configOrNull()?.let { proxy = it } }
     }
 
     override suspend fun complete(
