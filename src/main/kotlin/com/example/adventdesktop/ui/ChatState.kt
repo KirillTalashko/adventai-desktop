@@ -18,6 +18,13 @@ import com.example.adventdesktop.data.PromptOverride
 import com.example.adventdesktop.data.PromptOverrideStore
 import com.example.adventdesktop.data.SkillDocs
 import com.example.adventdesktop.data.resolveLlmConfig
+import com.example.adventdesktop.data.appHomeDir
+import com.example.adventdesktop.data.KnowledgeIndex
+import com.example.adventdesktop.data.OllamaEmbedder
+import com.example.adventdesktop.data.HashingEmbedder
+import com.example.adventdesktop.domain.rag.Embedder
+import com.example.adventdesktop.domain.rag.IndexStats
+import com.example.adventdesktop.domain.rag.Scored
 import com.example.adventdesktop.domain.Account
 import com.example.adventdesktop.domain.Awaiting
 import com.example.adventdesktop.domain.BUILT_IN_INVARIANTS
@@ -67,6 +74,23 @@ data class PipelineStep(val tool: String, val title: String, val output: String,
 
 /** День 20: результат одного прогона коннектора (MCP или Skill) — ответ, след вызовов и токены (для сравнения). */
 data class ConnectorRun(val reply: String, val steps: List<PipelineStep>, val usage: TokenUsage?)
+
+// --- День 21 (RAG): вью-модели для панели индексации базы знаний ---
+
+/** Статистика одной стратегии chunking для таблицы сравнения. */
+data class RagStrategyView(
+    val strategy: String, val chunks: Int, val avgChars: Int, val minChars: Int, val maxChars: Int,
+    val avgTokens: Int, val sections: Int, val buildMs: Long, val embedderId: String,
+)
+
+/** Сравнение двух стратегий chunking (fixed vs structural) + число документов. */
+data class RagComparisonView(val docCount: Int, val fixed: RagStrategyView, val structural: RagStrategyView)
+
+/** Один результат поиска: близость + провенанс (источник/раздел) + фрагмент. */
+data class RagHit(val score: Float, val source: String, val section: String, val snippet: String)
+
+/** Результаты поиска по обеим стратегиям рядом (для наглядного сравнения retrieval). */
+data class RagSearchView(val query: String, val fixed: List<RagHit>, val structural: List<RagHit>)
 
 /** Тулы пайплайна композиции (День 19). Их НЕ отдаём основному агенту-консультанту — только пайплайн-демо. */
 private val PIPELINE_TOOL_NAMES = setOf("visa_search", "visa_summarize", "save_report")
@@ -704,6 +728,113 @@ class ChatState(
         mcpGateway = null
         scope.launch { runCatching { gateway?.close() } }
     }
+
+    // --- День 21: индексация базы знаний (RAG) — пайплайн chunking → эмбеддинги → SQLite-индекс ---
+
+    /** Общий для приложения индекс визовой базы знаний (`~/.adventai/rag/`). */
+    private var knowledge: KnowledgeIndex? = null
+
+    var ragOpen by mutableStateOf(false)
+        private set
+    /** Строить настоящей Ollama (nomic-embed-text) или офлайн-фолбэком (без сети). */
+    var ragUseOllama by mutableStateOf(true)
+        private set
+    var ragBuilding by mutableStateOf(false)
+        private set
+    var ragProgress by mutableStateOf("")
+        private set
+    var ragNote by mutableStateOf<String?>(null)
+        private set
+    var ragComparison by mutableStateOf<RagComparisonView?>(null)
+        private set
+    var ragDocCount by mutableStateOf(0)
+        private set
+    var ragQuery by mutableStateOf("Сколько дней можно находиться в Шенгене?")
+    var ragSearching by mutableStateOf(false)
+        private set
+    var ragResults by mutableStateOf<RagSearchView?>(null)
+        private set
+
+    private fun knowledge(): KnowledgeIndex =
+        knowledge ?: KnowledgeIndex(File(appHomeDir(), "rag")).also { it.seedMissing(); knowledge = it }
+
+    private fun newEmbedder(): Embedder = if (ragUseOllama) OllamaEmbedder() else HashingEmbedder()
+
+    fun chooseRagEmbedder(useOllama: Boolean) { ragUseOllama = useOllama }
+
+    fun openRag() {
+        ragOpen = true
+        ragNote = null
+        val k = knowledge()
+        ragDocCount = k.documents().size
+        val f = k.stats("fixed")
+        val s = k.stats("structural")
+        ragComparison = if (f != null && s != null) RagComparisonView(ragDocCount, f.toView(), s.toView()) else null
+    }
+
+    fun closeRag() { ragOpen = false }
+
+    /** Построить индекс ОБЕИХ стратегий выбранным эмбеддером и обновить сравнение. */
+    fun buildIndex() {
+        if (ragBuilding) return
+        ragBuilding = true
+        ragNote = null
+        ragResults = null
+        ragProgress = "Подготовка…"
+        scope.launch {
+            val k = knowledge()
+            ragDocCount = k.documents().size
+            val emb = newEmbedder()
+            runCatching {
+                k.rebuild(emb) { strat, done, total -> ragProgress = "$strat: $done/$total чанков" }
+            }.onSuccess {
+                ragComparison = RagComparisonView(it.docCount, it.fixed.toView(), it.structural.toView())
+                ragProgress = ""
+                ragNote = "Индекс построен (эмбеддер ${emb.id}) для $ragDocCount документов."
+            }.onFailure {
+                ragProgress = ""
+                ragNote = "Ошибка: ${it.message}" +
+                    if (ragUseOllama) "\nСовет: запусти Ollama (`ollama serve` + `ollama pull nomic-embed-text`) или выключи Ollama выше — сработает офлайн-фолбэк." else ""
+            }
+            (emb as? OllamaEmbedder)?.close()
+            ragBuilding = false
+        }
+    }
+
+    /** Поиск по обеим стратегиям одним запросом — наглядное сравнение retrieval (fixed vs structural). */
+    fun searchKnowledge() {
+        val q = ragQuery.trim()
+        if (q.isEmpty() || ragSearching) return
+        ragSearching = true
+        ragNote = null
+        scope.launch {
+            val k = knowledge()
+            val emb = newEmbedder()
+            // Вектора несопоставимы, если индекс построен другим эмбеддером — честно предупреждаем.
+            val storedId = k.stats("fixed")?.embedderId
+            if (storedId != null && storedId != emb.id) {
+                ragNote = "Внимание: индекс построен эмбеддером «$storedId», а поиск идёт «${emb.id}» — сначала перестройте индекс."
+            }
+            runCatching {
+                val fixed = k.search(emb, "fixed", q, 3).map { it.toHit() }
+                val structural = k.search(emb, "structural", q, 3).map { it.toHit() }
+                RagSearchView(q, fixed, structural)
+            }.onSuccess { ragResults = it }
+                .onFailure { ragNote = "Ошибка поиска: ${it.message}" }
+            (emb as? OllamaEmbedder)?.close()
+            ragSearching = false
+        }
+    }
+
+    private fun IndexStats.toView() = RagStrategyView(
+        strategy, chunkCount, avgChars, minChars, maxChars, avgTokens, sectionCount, buildMs, embedderId,
+    )
+
+    private fun Scored.toHit() = RagHit(
+        score = score, source = chunk.meta.source,
+        section = chunk.meta.section.ifBlank { "(без раздела)" },
+        snippet = chunk.text.replace(Regex("\\s+"), " ").trim().take(200),
+    )
 
     // --- День 20: коннекторы агента (переключатели MCP / Skill) + демо-прогон и сравнение токенов ---
 

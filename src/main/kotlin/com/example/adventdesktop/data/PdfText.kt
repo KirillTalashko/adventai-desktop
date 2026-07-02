@@ -19,4 +19,19 @@ object PdfText {
             }.ifBlank { "(текст не извлечён — вероятно скан/изображение, проверьте вручную)" }
         }.getOrElse { "(ошибка чтения PDF: ${it.message})" }
     }
+
+    /**
+     * Полный текст PDF (День 21, RAG-индексация): все страницы, без усечения. Абзацы сохраняем (не
+     * схлопываем все пробелы, как в [extract]) — это важно для structural-chunking по абзацам. Скан без
+     * текстового слоя → пустая строка (такой файл в индекс не попадёт).
+     */
+    fun extractAll(file: File): String = runCatching {
+        PDDocument.load(file).use { doc ->
+            PDFTextStripper().getText(doc)
+                .replace("\r\n", "\n")
+                .replace(Regex("[ \\t]+"), " ")
+                .replace(Regex("\\n{3,}"), "\n\n")
+                .trim()
+        }
+    }.getOrElse { "" }
 }

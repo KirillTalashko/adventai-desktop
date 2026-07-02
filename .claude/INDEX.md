@@ -18,6 +18,7 @@
 | [ANTIPATTERNS.md](ANTIPATTERNS.md) | чего не делать |
 | [MCP.md](MCP.md) | подключение к MCP: порт `ToolGateway`, клиент (stdio-подпроцесс), локальный сервер, кнопка в UI (День 16) |
 | [WEEK_4_MCP_AND_SKILLS.md](WEEK_4_MCP_AND_SKILLS.md) | дорожная карта Недели 4 (Дни 16–20): MCP-клиент, свой MCP-сервер, Skill+CLI, сравнение токенов |
+| [WEEK_5_RAG.md](WEEK_5_RAG.md) | дорожная карта Недели 5 (с Дня 21): RAG, эмбеддинги (Ollama nomic-embed-text), chunking+overlap, reranking, метрики |
 | [COURSE_NOTES.md](COURSE_NOTES.md) | конспект чата курса: инсайты ведущего (агенты, память, MCP-токены, модели, opsec, карьера, ресурсы) |
 | [AST_INDEX.md](AST_INDEX.md) | структурный поиск по коду (ast-index): команды, когда использовать, авто-обновление индекса |
 

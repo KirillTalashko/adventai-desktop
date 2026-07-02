@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
@@ -39,6 +40,8 @@ import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.WarningAmber
 import com.example.adventdesktop.domain.TunableRole
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -124,6 +127,7 @@ fun App(state: ChatState) {
         if (state.interviewOpen) InterviewDialog(state)
         if (state.mcpDialogOpen) McpToolsDialog(state)
         if (state.connectorsOpen) ConnectorsDialog(state)
+        if (state.ragOpen) RagDialog(state)
     }
 }
 
@@ -402,6 +406,7 @@ private fun Composer(state: ChatState) {
                     if (state.config.developerMode) {
                         McpButton(state)
                         ConnectorsButton(state)
+                        RagButton(state)
                     }
                     DropdownChip(state.model.title, Models.all, { it.title }) { state.chooseModel(it) }
                     Spacer(Modifier.weight(1f))
@@ -473,6 +478,136 @@ private fun ConnectorsButton(state: ChatState) {
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(Icons.Filled.Tune, "Коннекторы агента", Modifier.size(20.dp), tint = AppColors.accent)
+        }
+    }
+}
+
+/** Кнопка «Индексация знаний (RAG)» (День 21) — открыть панель построения и сравнения индекса. */
+@Composable
+private fun RagButton(state: ChatState) {
+    Surface(
+        onClick = { state.openRag() },
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.size(34.dp)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(Icons.Filled.Storage, "Индексация знаний (RAG)", Modifier.size(20.dp), tint = AppColors.accent)
+        }
+    }
+}
+
+/** Окно «Индексация знаний (RAG)» (День 21): построить индекс, сравнить 2 стратегии chunking, найти. */
+@Composable
+private fun RagDialog(state: ChatState) {
+    AlertDialog(
+        onDismissRequest = { state.closeRag() },
+        confirmButton = { TextButton(onClick = { state.closeRag() }) { Text("Закрыть") } },
+        title = { Text("Индексация знаний (RAG)") },
+        text = {
+            Column(
+                modifier = Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    "Локальная визовая база знаний → чанки (2 стратегии) → эмбеддинги → SQLite-индекс с метаданными (source, title, section, chunk_id). Документов в корпусе: ${state.ragDocCount}.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                ConnectorToggleRow(
+                    "Эмбеддер: Ollama (nomic-embed-text)",
+                    if (state.ragUseOllama) "локально, 768-мерные вектора; нужна запущенная Ollama" else "выключено → офлайн-фолбэк (hashing, без сети)",
+                    state.ragUseOllama
+                ) { state.chooseRagEmbedder(it) }
+
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = { state.buildIndex() },
+                        enabled = !state.ragBuilding,
+                        colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)
+                    ) { Text("Построить индекс") }
+                    if (state.ragBuilding) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                        Text(state.ragProgress, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                state.ragNote?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = AppColors.accent)
+                }
+
+                state.ragComparison?.let { RagComparisonTable(it) }
+
+                HorizontalDivider()
+                Text("Поиск по индексу — сравнение retrieval двух стратегий", style = MaterialTheme.typography.labelLarge)
+                OutlinedTextField(
+                    value = state.ragQuery, onValueChange = { state.ragQuery = it },
+                    label = { Text("Запрос") }, singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = { state.searchKnowledge() },
+                        enabled = state.ragComparison != null && !state.ragSearching,
+                        colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)
+                    ) { Text("Найти") }
+                    if (state.ragSearching) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                }
+                state.ragResults?.let { res ->
+                    RagHitList("Fixed-size (top-3)", res.fixed)
+                    RagHitList("Structural (top-3)", res.structural)
+                }
+            }
+        }
+    )
+}
+
+/** Таблица сравнения 2 стратегий chunking: метрика | fixed | structural. */
+@Composable
+private fun RagComparisonTable(cmp: RagComparisonView) {
+    @Composable
+    fun row(label: String, fixed: String, structural: String, header: Boolean = false) {
+        val weight = if (header) FontWeight.SemiBold else FontWeight.Normal
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(label, Modifier.weight(1.4f), style = MaterialTheme.typography.labelSmall, fontWeight = weight, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(fixed, Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, fontWeight = weight)
+            Text(structural, Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, fontWeight = weight)
+        }
+    }
+    Surface(color = AppColors.accent.copy(alpha = 0.06f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            val f = cmp.fixed
+            val s = cmp.structural
+            row("", "fixed", "structural", header = true)
+            row("чанков", "${f.chunks}", "${s.chunks}")
+            row("ср. символов", "${f.avgChars}", "${s.avgChars}")
+            row("мин/макс", "${f.minChars}/${f.maxChars}", "${s.minChars}/${s.maxChars}")
+            row("ср. токенов", "${f.avgTokens}", "${s.avgTokens}")
+            row("разделов (section)", "${f.sections}", "${s.sections}")
+            row("время, мс", "${f.buildMs}", "${s.buildMs}")
+            row("эмбеддер", f.embedderId, s.embedderId)
+            Text(
+                "Вывод: fixed режет по фикс. размеру равномерно, но разделы не сохранены (section=0) — мысль может рваться на стыке. structural=раздел: метаданные section заполнены → в ответе агента виден источник (файл › раздел).",
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
+    }
+}
+
+/** Список результатов поиска одной стратегии: близость + провенанс + фрагмент. */
+@Composable
+private fun RagHitList(title: String, hits: List<RagHit>) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = AppColors.accent)
+        if (hits.isEmpty()) {
+            Text("— пусто (индекс не построен?)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            hits.forEach { h ->
+                Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("%.3f · %s › %s".format(h.score, h.source, h.section), style = MaterialTheme.typography.labelSmall, color = AppColors.accent)
+                        Text(h.snippet, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                    }
+                }
+            }
         }
     }
 }

@@ -1,0 +1,15 @@
+# Корпус визовой базы знаний (RAG, День 21). По одному имени файла на строку.
+# PDF (japan.pdf) не в списке — он генерируется при сидинге (SamplePdf), демонстрируя ветку pdf→текст.
+schengen.md
+usa.md
+uk.md
+uae.md
+china.md
+canada.md
+work-visa.md
+student-visa.md
+general-process.md
+biometrics-appeals.md
+insurance-photo.md
+faq.md
+checklists.md
