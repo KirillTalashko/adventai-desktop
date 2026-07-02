@@ -90,7 +90,8 @@ class McpClient(
             install(SSE)
             // Долгоживущий SSE-стрим + небыстрые тулзы (research): дефолтный 15-сек requestTimeout CIO убьёт
             // запрос → отключаем (0 = без таймаута). Иначе get/add дайджеста по сети падают по таймауту.
-            engine { requestTimeout = 0 }
+            // requestTimeout=0 + прокси из настроек (для сетей с локальным туннелем; иначе прямое соединение).
+            engine { requestTimeout = 0; HttpProxy.configOrNull()?.let { proxy = it } }
             // Токен на КАЖДЫЙ запрос: SDK шлёт служебный POST без кастомных заголовков, поэтому defaultRequest.
             if (!authToken.isNullOrBlank()) {
                 defaultRequest { header(HttpHeaders.Authorization, "Bearer $authToken") }

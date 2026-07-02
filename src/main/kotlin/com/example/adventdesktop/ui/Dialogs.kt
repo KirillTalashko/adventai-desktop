@@ -29,6 +29,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -57,6 +59,10 @@ fun SettingsDialog(state: ChatState, onClose: () -> Unit) {
     var orKey by remember { mutableStateOf(state.config.openrouterKey) }
     var dsKey by remember { mutableStateOf(state.config.deepseekKey) }
     var model by remember { mutableStateOf(state.model) }
+    var devMode by remember { mutableStateOf(state.config.developerMode) }
+    var darkTheme by remember { mutableStateOf(state.config.darkTheme) }
+    var reducedMotion by remember { mutableStateOf(state.config.reducedMotion) }
+    var proxy by remember { mutableStateOf(state.config.httpProxy) }
 
     AlertDialog(
         onDismissRequest = onClose,
@@ -80,16 +86,47 @@ fun SettingsDialog(state: ChatState, onClose: () -> Unit) {
                 )
                 Text("Модель по умолчанию", style = MaterialTheme.typography.labelLarge)
                 ModelSelector(model) { model = it }
+                OutlinedTextField(
+                    value = proxy, onValueChange = { proxy = it },
+                    label = { Text("HTTP-прокси (необязательно)") },
+                    placeholder = { Text("http://127.0.0.1:10809") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "Для сетей с локальным туннелем, где прямой выход/DNS закрыты. Пусто — прямое соединение.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                SettingToggle("Тёмная тема", "Тёмное оформление приложения.", darkTheme) { darkTheme = it }
+                SettingToggle("Меньше анимаций", "Мгновенная прокрутка без плавных переходов.", reducedMotion) { reducedMotion = it }
+                SettingToggle("Режим разработчика", "Показывать инженерные витрины: инструменты MCP, коннекторы, демо-пайплайн.", devMode) { devMode = it }
             }
         },
         confirmButton = {
             TextButton(onClick = {
-                state.saveConfig(state.config.copy(openrouterKey = orKey.trim(), deepseekKey = dsKey.trim(), modelId = model.id))
+                state.saveConfig(
+                    state.config.copy(
+                        openrouterKey = orKey.trim(), deepseekKey = dsKey.trim(), modelId = model.id,
+                        developerMode = devMode, darkTheme = darkTheme, reducedMotion = reducedMotion,
+                        httpProxy = proxy.trim(),
+                    )
+                )
                 onClose()
             }) { Text("Сохранить") }
         },
         dismissButton = { TextButton(onClick = onClose) { Text("Отмена") } }
     )
+}
+
+/** Строка-настройка «название + описание + ползунок» (аудит #10 — единый компактный вид для тумблеров). */
+@Composable
+private fun SettingToggle(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.SemiBold)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = checked, onCheckedChange = onChange, colors = SwitchDefaults.colors(checkedTrackColor = AppColors.accent))
+    }
 }
 
 @Composable
@@ -98,7 +135,7 @@ private fun ModelSelector(selected: ModelOption, onSelect: (ModelOption) -> Unit
     Box {
         Surface(
             color = MaterialTheme.colorScheme.surface,
-            shape = RoundedCornerShape(10.dp),
+            shape = RoundedCornerShape(Radii.sm),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             modifier = Modifier.fillMaxWidth().clickable { open = true }
         ) {
@@ -127,7 +164,7 @@ fun ProfileDialog(state: ChatState, onClose: () -> Unit) {
         state = rememberDialogState(size = DpSize(560.dp, 700.dp)),
         title = "Профиль"
     ) {
-        AdventTheme {
+        AdventTheme(dark = state.config.darkTheme) {
             Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                 Column(
                     Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
@@ -160,7 +197,7 @@ fun MemoryDialog(state: ChatState, onClose: () -> Unit) {
         state = rememberDialogState(size = DpSize(700.dp, 660.dp)),
         title = "Память"
     ) {
-        AdventTheme {
+        AdventTheme(dark = state.config.darkTheme) {
             Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                 var refresh by remember { mutableStateOf(0) }
                 val longTerm = remember(refresh) { state.longTerm() }
@@ -222,7 +259,7 @@ fun MemoryDialog(state: ChatState, onClose: () -> Unit) {
                         TextButton(onClick = { state.clearWorking(); refresh++ }) { Text("Очистить рабочую") }
                         TextButton(onClick = { state.clearLongTerm(); refresh++ }) { Text("Очистить долговременную") }
                         Spacer(Modifier.weight(1f))
-                        Button(onClick = onClose, shape = RoundedCornerShape(10.dp)) { Text("Готово") }
+                        Button(onClick = onClose, shape = RoundedCornerShape(Radii.sm)) { Text("Готово") }
                     }
                     Text(
                         "Память пополняется автоматически по ходу диалога; здесь можно дополнить вручную.",
@@ -242,9 +279,9 @@ fun InvariantsDialog(state: ChatState, onClose: () -> Unit) {
     DialogWindow(
         onCloseRequest = onClose,
         state = rememberDialogState(size = DpSize(700.dp, 640.dp)),
-        title = "Инварианты"
+        title = "Правила"
     ) {
-        AdventTheme {
+        AdventTheme(dark = state.config.darkTheme) {
             Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                 val all = state.invariants
                 val builtIns = all.filter { it.builtIn }
@@ -254,7 +291,7 @@ fun InvariantsDialog(state: ChatState, onClose: () -> Unit) {
                     Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Text("Инварианты", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text("Правила", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     Text(
                         "Правила, которые ассистент не имеет права нарушать. Хранятся отдельно от диалога, учитываются в каждом ответе; при конфликте ассистент отказывается и объясняет причину.",
                         style = MaterialTheme.typography.bodyMedium,
@@ -265,16 +302,16 @@ fun InvariantsDialog(state: ChatState, onClose: () -> Unit) {
                         builtIns.forEach { Bullet(it.text) }
                     }
 
-                    MemoryCard("Ваши инварианты", "бизнес-правила, ограничения по бюджету/стеку, договорённости") {
+                    MemoryCard("Ваши правила", "бизнес-правила, ограничения по бюджету/стеку, договорённости") {
                         if (userInv.isEmpty()) EmptyHint() else userInv.forEach { inv ->
                             InvariantRow(inv, onToggle = { state.toggleInvariant(inv.id) }, onRemove = { state.removeInvariant(inv.id) })
                         }
-                        AddRow("Добавить инвариант…", "Добавить") { state.addInvariant(it) }
+                        AddRow("Добавить правило…", "Добавить") { state.addInvariant(it) }
                     }
 
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Spacer(Modifier.weight(1f))
-                        Button(onClick = onClose, shape = RoundedCornerShape(10.dp)) { Text("Готово") }
+                        Button(onClick = onClose, shape = RoundedCornerShape(Radii.sm)) { Text("Готово") }
                     }
                 }
             }
@@ -305,10 +342,12 @@ fun InterviewDialog(state: ChatState) {
         state = rememberDialogState(size = DpSize(640.dp, 680.dp)),
         title = "Пробное собеседование"
     ) {
-        AdventTheme {
+        AdventTheme(dark = state.config.darkTheme) {
             Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                 val scroll = rememberScrollState()
-                LaunchedEffect(state.interviewMessages.size, state.interviewLoading) { scroll.animateScrollTo(scroll.maxValue) }
+                LaunchedEffect(state.interviewMessages.size, state.interviewLoading) {
+                    if (state.config.reducedMotion) scroll.scrollTo(scroll.maxValue) else scroll.animateScrollTo(scroll.maxValue)
+                }
                 Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Пробное собеседование", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     Text(
@@ -339,12 +378,12 @@ fun InterviewDialog(state: ChatState) {
                                 modifier = Modifier.weight(1f),
                                 placeholder = { Text("Ваш ответ офицеру…") },
                                 maxLines = 4,
-                                shape = RoundedCornerShape(10.dp)
+                                shape = RoundedCornerShape(Radii.sm)
                             )
                             FilledTonalButton(
                                 onClick = { state.interviewSubmit() },
                                 enabled = !state.interviewLoading && state.interviewInput.isNotBlank(),
-                                shape = RoundedCornerShape(10.dp)
+                                shape = RoundedCornerShape(Radii.sm)
                             ) { Text("Ответить") }
                         }
                     }
@@ -356,7 +395,7 @@ fun InterviewDialog(state: ChatState) {
                             ) { Text("Завершить и оценить") }
                         }
                         Spacer(Modifier.weight(1f))
-                        Button(onClick = { state.closeInterview() }, shape = RoundedCornerShape(10.dp)) { Text("Вернуться к задаче") }
+                        Button(onClick = { state.closeInterview() }, shape = RoundedCornerShape(Radii.sm)) { Text("Вернуться к задаче") }
                     }
                 }
             }
@@ -368,7 +407,7 @@ fun InterviewDialog(state: ChatState) {
 private fun MemoryCard(title: String, subtitle: String, content: @Composable () -> Unit) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(Radii.lg),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -409,11 +448,11 @@ private fun AddRow(placeholder: String, action: String, onAdd: (String) -> Unit)
             modifier = Modifier.weight(1f),
             placeholder = { Text(placeholder) },
             singleLine = true,
-            shape = RoundedCornerShape(10.dp)
+            shape = RoundedCornerShape(Radii.sm)
         )
         FilledTonalButton(
             onClick = { if (text.isNotBlank()) { onAdd(text.trim()); text = "" } },
-            shape = RoundedCornerShape(10.dp)
+            shape = RoundedCornerShape(Radii.sm)
         ) { Text(action) }
     }
 }

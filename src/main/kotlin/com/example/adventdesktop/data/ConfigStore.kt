@@ -16,6 +16,14 @@ data class DesktopConfig(
     val skillPromptTuneEnabled: Boolean = false,
     // День 20: подключить СТОРОННЕЕ MCP (server-everything через npx) — второй сервер в маршрутизаторе.
     val extraMcpEnabled: Boolean = false,
+    // Режим разработчика: показывать инженерные витрины (инструменты MCP, коннекторы, демо-пайплайн). По умолчанию скрыто.
+    val developerMode: Boolean = false,
+    // Оформление (аудит Рамса #9): тёмная тема и «меньше анимаций» (reduced-motion). По умолчанию — светлая, анимации вкл.
+    val darkTheme: Boolean = false,
+    val reducedMotion: Boolean = false,
+    // HTTP-прокси для всех запросов приложения (LLM + удалённый MCP). Для сетей с локальным туннелем,
+    // где прямой выход/DNS закрыты (напр. http://127.0.0.1:10809). Пусто → прямое соединение.
+    val httpProxy: String = "",
 ) {
     fun keyFor(provider: String): String = if (provider == "deepseek") deepseekKey else openrouterKey
 }
@@ -44,6 +52,10 @@ class ConfigStore(private val store: FileStore) {
             skillDocsEnabled = dto.skillDocsEnabled,
             skillPromptTuneEnabled = dto.skillPromptTuneEnabled,
             extraMcpEnabled = dto.extraMcpEnabled,
+            developerMode = dto.developerMode,
+            darkTheme = dto.darkTheme,
+            reducedMotion = dto.reducedMotion,
+            httpProxy = dto.httpProxy.ifBlank { System.getenv("HTTPS_PROXY") ?: System.getenv("HTTP_PROXY").orEmpty() }.trim(),
         )
     }
 
@@ -61,6 +73,10 @@ class ConfigStore(private val store: FileStore) {
                     skillDocsEnabled = config.skillDocsEnabled,
                     skillPromptTuneEnabled = config.skillPromptTuneEnabled,
                     extraMcpEnabled = config.extraMcpEnabled,
+                    developerMode = config.developerMode,
+                    darkTheme = config.darkTheme,
+                    reducedMotion = config.reducedMotion,
+                    httpProxy = config.httpProxy,
                 )
             )
         )

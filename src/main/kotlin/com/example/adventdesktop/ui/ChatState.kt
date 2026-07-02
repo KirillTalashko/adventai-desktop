@@ -8,6 +8,7 @@ import com.example.adventdesktop.data.CliSkillRunner
 import com.example.adventdesktop.data.ConfigStore
 import com.example.adventdesktop.data.DesktopConfig
 import com.example.adventdesktop.data.DocStore
+import com.example.adventdesktop.data.HttpProxy
 import com.example.adventdesktop.data.InvariantStore
 import com.example.adventdesktop.data.LlmClient
 import com.example.adventdesktop.data.ModelOption
@@ -750,6 +751,12 @@ class ChatState(
         rebuildAgent()
     }
 
+    /** Режим разработчика: только видимость инженерных витрин (без пересборки агента). */
+    fun setDeveloperMode(value: Boolean) {
+        config = config.copy(developerMode = value)
+        configStore.save(config)
+    }
+
     /** Спросить агента ЧЕРЕЗ MCP (схемы тулзов грузятся в запрос → tool-loop). Для сравнения с навыком. */
     fun askViaMcp() {
         val llm = client ?: run { error = noKeyError(); return }
@@ -1130,6 +1137,8 @@ class ChatState(
     }
 
     private fun rebuildAgent() {
+        // Прокси из настроек — ДО создания клиентов (их Ktor-движки читают HttpProxy при конструировании).
+        HttpProxy.url = config.httpProxy
         client?.close()
         extractorClient?.close()
         // Служебный клиент (deepseek) — для извлечения памяти и стража инвариантов: дёшево и стабильно.
