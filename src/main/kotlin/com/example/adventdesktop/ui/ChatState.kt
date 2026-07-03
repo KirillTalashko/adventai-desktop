@@ -23,8 +23,9 @@ import com.example.adventdesktop.data.KnowledgeIndex
 import com.example.adventdesktop.data.OllamaEmbedder
 import com.example.adventdesktop.data.HashingEmbedder
 import com.example.adventdesktop.domain.rag.Embedder
+import com.example.adventdesktop.domain.rag.GoldAnswer
 import com.example.adventdesktop.domain.rag.IndexStats
-import com.example.adventdesktop.domain.rag.Scored
+import com.example.adventdesktop.domain.rag.RagAnswer
 import com.example.adventdesktop.domain.Account
 import com.example.adventdesktop.domain.Awaiting
 import com.example.adventdesktop.domain.BUILT_IN_INVARIANTS
@@ -85,12 +86,6 @@ data class RagStrategyView(
 
 /** Сравнение двух стратегий chunking (fixed vs structural) + число документов. */
 data class RagComparisonView(val docCount: Int, val fixed: RagStrategyView, val structural: RagStrategyView)
-
-/** Один результат поиска: близость + провенанс (источник/раздел) + фрагмент. */
-data class RagHit(val score: Float, val source: String, val section: String, val snippet: String)
-
-/** Результаты поиска по обеим стратегиям рядом (для наглядного сравнения retrieval). */
-data class RagSearchView(val query: String, val fixed: List<RagHit>, val structural: List<RagHit>)
 
 /** Тулы пайплайна композиции (День 19). Их НЕ отдаём основному агенту-консультанту — только пайплайн-демо. */
 private val PIPELINE_TOOL_NAMES = setOf("visa_search", "visa_summarize", "save_report")
@@ -750,10 +745,6 @@ class ChatState(
     var ragDocCount by mutableStateOf(0)
         private set
     var ragQuery by mutableStateOf("Сколько дней можно находиться в Шенгене?")
-    var ragSearching by mutableStateOf(false)
-        private set
-    var ragResults by mutableStateOf<RagSearchView?>(null)
-        private set
 
     private fun knowledge(): KnowledgeIndex =
         knowledge ?: KnowledgeIndex(File(appHomeDir(), "rag")).also { it.seedMissing(); knowledge = it }
@@ -779,7 +770,6 @@ class ChatState(
         if (ragBuilding) return
         ragBuilding = true
         ragNote = null
-        ragResults = null
         ragProgress = "Подготовка…"
         scope.launch {
             val k = knowledge()
@@ -801,40 +791,73 @@ class ChatState(
         }
     }
 
-    /** Поиск по обеим стратегиям одним запросом — наглядное сравнение retrieval (fixed vs structural). */
-    fun searchKnowledge() {
-        val q = ragQuery.trim()
-        if (q.isEmpty() || ragSearching) return
-        ragSearching = true
-        ragNote = null
-        scope.launch {
-            val k = knowledge()
-            val emb = newEmbedder()
-            // Вектора несопоставимы, если индекс построен другим эмбеддером — честно предупреждаем.
-            val storedId = k.stats("fixed")?.embedderId
-            if (storedId != null && storedId != emb.id) {
-                ragNote = "Внимание: индекс построен эмбеддером «$storedId», а поиск идёт «${emb.id}» — сначала перестройте индекс."
-            }
-            runCatching {
-                val fixed = k.search(emb, "fixed", q, 3).map { it.toHit() }
-                val structural = k.search(emb, "structural", q, 3).map { it.toHit() }
-                RagSearchView(q, fixed, structural)
-            }.onSuccess { ragResults = it }
-                .onFailure { ragNote = "Ошибка поиска: ${it.message}" }
-            (emb as? OllamaEmbedder)?.close()
-            ragSearching = false
-        }
-    }
-
     private fun IndexStats.toView() = RagStrategyView(
         strategy, chunkCount, avgChars, minChars, maxChars, avgTokens, sectionCount, buildMs, embedderId,
     )
 
-    private fun Scored.toHit() = RagHit(
-        score = score, source = chunk.meta.source,
-        section = chunk.meta.section.ifBlank { "(без раздела)" },
-        snippet = chunk.text.replace(Regex("\\s+"), " ").trim().take(200),
-    )
+    // --- День 22: RAG-ответ (два режима: с RAG / без) + контрольный набор из 10 вопросов ---
+
+    var ragAnswering by mutableStateOf(false)
+        private set
+    var ragAnswerRag by mutableStateOf<RagAnswer?>(null)
+        private set
+    var ragAnswerPlain by mutableStateOf<RagAnswer?>(null)
+        private set
+    var goldRunning by mutableStateOf(false)
+        private set
+    var goldProgress by mutableStateOf("")
+        private set
+    var goldAnswers by mutableStateOf<List<GoldAnswer>>(emptyList())
+        private set
+
+    /** Сравнить ответ агента С RAG и БЕЗ RAG на текущем вопросе ([ragQuery]) — ядро задания Дня 22. */
+    fun ragCompare() {
+        val q = ragQuery.trim()
+        val gw = client
+        if (q.isEmpty() || ragAnswering) return
+        if (gw == null) { ragNote = "Нет ключа LLM — задайте его в «Настройках»."; return }
+        ragAnswering = true
+        ragNote = null
+        ragAnswerRag = null
+        ragAnswerPlain = null
+        scope.launch {
+            val emb = newEmbedder()
+            runCatching {
+                val k = knowledge()
+                ragAnswerPlain = k.answer(gw, emb, q, useRag = false)   // без RAG — из общих знаний модели
+                ragAnswerRag = k.answer(gw, emb, q, useRag = true)      // с RAG — по нашей базе, со ссылками
+            }.onFailure { ragNote = "Ошибка ответа: ${it.message}" }
+            (emb as? OllamaEmbedder)?.close()
+            ragAnswering = false
+        }
+    }
+
+    /** Подставить вопрос-ловушку (нет в базе) и сравнить — наглядно: без RAG выдумает, с RAG честно откажет. */
+    fun askNegativeExample() {
+        ragQuery = knowledge().goldQuestions().firstOrNull { it.isNegative }?.question
+            ?: "Как оформить визу для экспедиции на Северный полюс?"
+        ragCompare()
+    }
+
+    /** Прогнать весь набор (Вариант B): по каждому вопросу — ответ С RAG и без RAG, для сравнения качества. */
+    fun runGoldAnswers() {
+        val gw = client
+        if (goldRunning) return
+        if (gw == null) { ragNote = "Нет ключа LLM — задайте его в «Настройках»."; return }
+        goldRunning = true
+        ragNote = null
+        goldAnswers = emptyList()
+        goldProgress = "Подготовка…"
+        scope.launch {
+            val emb = newEmbedder()
+            runCatching {
+                knowledge().goldAnswers(gw, emb) { i, n -> goldProgress = "вопрос $i/$n" }
+            }.onSuccess { goldAnswers = it; goldProgress = "" }
+                .onFailure { ragNote = "Ошибка прогона набора: ${it.message}"; goldProgress = "" }
+            (emb as? OllamaEmbedder)?.close()
+            goldRunning = false
+        }
+    }
 
     // --- День 20: коннекторы агента (переключатели MCP / Skill) + демо-прогон и сравнение токенов ---
 
