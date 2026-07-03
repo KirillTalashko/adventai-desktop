@@ -91,6 +91,10 @@ import com.example.adventdesktop.domain.Awaiting
 import com.example.adventdesktop.domain.Message
 import com.example.adventdesktop.domain.Role
 import com.example.adventdesktop.domain.TokenUsage
+import com.example.adventdesktop.domain.rag.GoldAnswer
+import com.example.adventdesktop.domain.rag.RagAnswer
+import com.example.adventdesktop.domain.rag.RagSource
+import com.example.adventdesktop.domain.rag.ragLooksLikeRefusal
 
 private val LogoBg = Color(0xFFDADAD6)
 private val LogoFg = Color(0xFF8A8A85)
@@ -506,11 +510,22 @@ private fun RagDialog(state: ChatState) {
         title = { Text("Индексация знаний (RAG)") },
         text = {
             Column(
-                modifier = Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
+                modifier = Modifier.heightIn(max = 600.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                // Вводная рамка — mental model простыми словами.
                 Text(
-                    "Локальная визовая база знаний → чанки (2 стратегии) → эмбеддинги → SQLite-индекс с метаданными (source, title, section, chunk_id). Документов в корпусе: ${state.ragDocCount}.",
+                    "RAG = агент отвечает по ВАШИМ документам со ссылками, а не из общей памяти модели. Ниже 3 шага.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface
+                )
+                state.ragNote?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = AppColors.accent)
+                }
+
+                // === Шаг 1 — индекс ===
+                Text("Шаг 1 · Построить индекс базы", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = AppColors.accent)
+                Text(
+                    "База знаний → чанки → эмбеддинги → SQLite-индекс с метаданными. Документов в корпусе: ${state.ragDocCount}.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 ConnectorToggleRow(
@@ -518,7 +533,6 @@ private fun RagDialog(state: ChatState) {
                     if (state.ragUseOllama) "локально, 768-мерные вектора; нужна запущенная Ollama" else "выключено → офлайн-фолбэк (hashing, без сети)",
                     state.ragUseOllama
                 ) { state.chooseRagEmbedder(it) }
-
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
                         onClick = { state.buildIndex() },
@@ -530,33 +544,177 @@ private fun RagDialog(state: ChatState) {
                         Text(state.ragProgress, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                state.ragNote?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = AppColors.accent)
-                }
-
                 state.ragComparison?.let { RagComparisonTable(it) }
 
+                // === Шаг 2 — спросить, сравнить два режима ===
                 HorizontalDivider()
-                Text("Поиск по индексу — сравнение retrieval двух стратегий", style = MaterialTheme.typography.labelLarge)
+                Text("Шаг 2 · Спросить — и сравнить два режима", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = AppColors.accent)
+                Text(
+                    "Один вопрос — два ответа. Без RAG: из общей памяти модели (без источника, может ошибиться или выдумать). " +
+                        "С RAG: по найденным фрагментам вашей базы, со ссылками; если данных нет — честно скажет.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 OutlinedTextField(
                     value = state.ragQuery, onValueChange = { state.ragQuery = it },
-                    label = { Text("Запрос") }, singleLine = true, modifier = Modifier.fillMaxWidth()
+                    label = { Text("Вопрос") }, singleLine = true, modifier = Modifier.fillMaxWidth()
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
-                        onClick = { state.searchKnowledge() },
-                        enabled = state.ragComparison != null && !state.ragSearching,
+                        onClick = { state.ragCompare() },
+                        enabled = state.ragComparison != null && !state.ragAnswering,
                         colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)
-                    ) { Text("Найти") }
-                    if (state.ragSearching) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                    ) { Text("Спросить в обоих режимах") }
+                    if (state.ragAnswering) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
                 }
-                state.ragResults?.let { res ->
-                    RagHitList("Fixed-size (top-3)", res.fixed)
-                    RagHitList("Structural (top-3)", res.structural)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = { state.askNegativeExample() }, enabled = state.ragComparison != null && !state.ragAnswering) {
+                        Text("Пример: вопрос не из базы", style = MaterialTheme.typography.labelSmall)
+                    }
                 }
+                val rag = state.ragAnswerRag
+                val plain = state.ragAnswerPlain
+                // Ловушка: С RAG отказался, а Без RAG всё равно ответил → плашка «это выдумка» прямо на карточке.
+                val plainInvented = rag != null && plain != null &&
+                    ragLooksLikeRefusal(rag.text) && !ragLooksLikeRefusal(plain.text)
+                plain?.let {
+                    RagAnswerCard(
+                        it, warn = true, whatIs = "из общей памяти модели — без источника",
+                        note = if (plainInvented) "⚠ Похоже на выдумку: в вашей базе данных на этот вопрос нет, но модель всё равно ответила уверенно." else null
+                    )
+                }
+                rag?.let { RagAnswerCard(it, warn = false, whatIs = "по вашей базе — со ссылками на источники") }
+                if (rag != null && rag.sources.isNotEmpty()) RagEvidence(rag.sources, ragLooksLikeRefusal(rag.text))
+                if (rag != null && plain != null) {
+                    Surface(color = AppColors.accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text("В чём разница", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
+                            if (plainInvented) {
+                                Text("• Этого нет в вашей базе. С RAG честно отказался, а Без RAG выдумал правдоподобный ответ. Ровно ради этого и нужен RAG.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+                            } else {
+                                Text("• С RAG опирается на ${rag.sources.size} фрагмент(ов) вашей базы (выше). Без RAG — 0 источников, ответ из общей памяти модели.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+                                Text("• Если ответа в базе нет — С RAG честно откажет, а Без RAG может выдумать. Проверьте кнопкой «Пример: вопрос не из базы».", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+                            }
+                        }
+                    }
+                }
+
+                // === Шаг 3 — контрольный набор (сравнение качества ответов) ===
+                HorizontalDivider()
+                Text("Шаг 3 · Проверить на 10 контрольных вопросах", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = AppColors.accent)
+                Text(
+                    "Прогоняем все 10 вопросов в обоих режимах и сравниваем качество: с RAG — ответ со ссылкой на нужный источник, " +
+                        "а на вопросе-ловушке честный отказ; без RAG — без ссылок, а на ловушке модель выдумывает.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = { state.runGoldAnswers() },
+                        enabled = state.ragComparison != null && !state.goldRunning,
+                        colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)
+                    ) { Text("Прогнать 10 вопросов") }
+                    if (state.goldRunning) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                        Text(state.goldProgress, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                if (state.goldAnswers.isNotEmpty()) GoldAnswersView(state.goldAnswers)
             }
         }
     )
+}
+
+/** Карточка ответа одного режима: ярлык (режим + «что это»), техстрока, текст, использованные источники. */
+@Composable
+private fun RagAnswerCard(a: RagAnswer, warn: Boolean, whatIs: String, note: String? = null) {
+    val accent = if (warn) MaterialTheme.colorScheme.error else AppColors.accent
+    Surface(color = accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("${a.mode} — $whatIs", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = accent)
+            note?.let { Text(it, fontWeight = FontWeight.Medium, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error) }
+            val toks = a.usage?.let { "${it.total} ток." } ?: "—"
+            val ctx = if (a.contextChars > 0) "контекст ${a.contextChars} симв." else "без контекста базы"
+            Text("$toks · $ctx", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            ExpandableText(a.text, collapsedLines = 6)
+            if (a.sources.isNotEmpty()) {
+                Text("Источники:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                a.sources.forEach { s ->
+                    Text("[${s.n}] %.3f · %s › %s".format(s.score, s.source, s.section), style = MaterialTheme.typography.labelSmall, color = accent)
+                }
+            }
+        }
+    }
+}
+
+/** «На чём основан ответ С RAG»: фрагменты базы, что ушли в контекст. При отказе честно поясняем, почему. */
+@Composable
+private fun RagEvidence(sources: List<RagSource>, refused: Boolean) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            if (refused)
+                "Поиск всё равно вернул ближайшие фрагменты, но ни один не отвечает на вопрос — поэтому С RAG честно " +
+                    "сказал «нет данных». (Векторный поиск всегда отдаёт k ближайших; отсечь нерелевантное помогает " +
+                    "порог близости и reranking — День 23.)"
+            else
+                "На чём основан ответ С RAG (эти выдержки из вашей базы дописаны в запрос):",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (refused) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        sources.forEach { s ->
+            Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("[${s.n}] %s › %s · %.3f".format(s.source, s.section, s.score), style = MaterialTheme.typography.labelSmall, color = AppColors.accent)
+                    ExpandableText(s.text, collapsedLines = 3)
+                }
+            }
+        }
+    }
+}
+
+/** Итог прогона набора (Вариант B): сводка-история + разбор по вопросам (вердикт С RAG / Без RAG + ответы). */
+@Composable
+private fun GoldAnswersView(items: List<GoldAnswer>) {
+    val positives = items.filter { !it.q.isNegative }
+    val withSources = positives.count { it.ragHasSources }
+    val onTarget = positives.count { it.ragOnTarget == true }
+    val neg = items.firstOrNull { it.q.isNegative }
+    Surface(color = AppColors.accent.copy(alpha = 0.06f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Итог сравнения", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
+            Text(
+                "• С RAG: $withSources из ${positives.size} ответов со ссылками, из них $onTarget по нужному источнику." +
+                    (neg?.let { "  На ловушке: ${if (it.ragRefused) "честно отказался" else "ответил — проверьте"}." } ?: ""),
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                "• Без RAG: 0 ответов со ссылками." +
+                    (neg?.let { "  На ловушке: ${if (it.plainRefused) "отказался" else "выдумал ответ"}." } ?: ""),
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface
+            )
+            HorizontalDivider()
+            items.forEach { GoldAnswerRow(it) }
+        }
+    }
+}
+
+/** Одна строка разбора: вопрос + короткий вердикт по обоим режимам + раскрытие обоих ответов. */
+@Composable
+private fun GoldAnswerRow(a: GoldAnswer) {
+    val ragMark = when {
+        a.q.isNegative -> if (a.ragRefused) "✓ честный отказ" else "⚠ ответил (данных нет)"
+        a.ragOnTarget == true -> "✓ по нужному источнику"
+        a.ragHasSources -> "⚠ со ссылкой, но не на нужный документ"
+        else -> "✗ без источника"
+    }
+    val plainMark = when {
+        a.q.isNegative -> if (a.plainRefused) "отказался" else "выдумал"
+        else -> "без ссылок"
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text("#${a.q.id}. ${a.q.question}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
+        Text("С RAG: $ragMark   ·   Без RAG: $plainMark", style = MaterialTheme.typography.labelSmall, color = AppColors.accent)
+        ExpandableText("С RAG — ${a.rag.text}", collapsedLines = 2)
+        ExpandableText("Без RAG — ${a.plain.text}", collapsedLines = 2)
+    }
 }
 
 /** Таблица сравнения 2 стратегий chunking: метрика | fixed | structural. */
@@ -588,26 +746,6 @@ private fun RagComparisonTable(cmp: RagComparisonView) {
                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp)
             )
-        }
-    }
-}
-
-/** Список результатов поиска одной стратегии: близость + провенанс + фрагмент. */
-@Composable
-private fun RagHitList(title: String, hits: List<RagHit>) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = AppColors.accent)
-        if (hits.isEmpty()) {
-            Text("— пусто (индекс не построен?)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        } else {
-            hits.forEach { h ->
-                Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("%.3f · %s › %s".format(h.score, h.source, h.section), style = MaterialTheme.typography.labelSmall, color = AppColors.accent)
-                        Text(h.snippet, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
-                    }
-                }
-            }
         }
     }
 }

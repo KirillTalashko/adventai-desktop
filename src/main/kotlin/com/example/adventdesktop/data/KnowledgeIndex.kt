@@ -1,10 +1,15 @@
 package com.example.adventdesktop.data
 
+import com.example.adventdesktop.domain.LlmGateway
 import com.example.adventdesktop.domain.rag.Chunker
 import com.example.adventdesktop.domain.rag.DocumentIndexer
 import com.example.adventdesktop.domain.rag.Embedder
 import com.example.adventdesktop.domain.rag.FixedSizeChunker
+import com.example.adventdesktop.domain.rag.GoldAnswer
+import com.example.adventdesktop.domain.rag.GoldQuestion
 import com.example.adventdesktop.domain.rag.IndexStats
+import com.example.adventdesktop.domain.rag.RagAnswer
+import com.example.adventdesktop.domain.rag.RagAnswerer
 import com.example.adventdesktop.domain.rag.RagDocument
 import com.example.adventdesktop.domain.rag.RagSearch
 import com.example.adventdesktop.domain.rag.Scored
@@ -63,6 +68,48 @@ class KnowledgeIndex(ragDir: File) {
 
     suspend fun search(embedder: Embedder, strategy: String, query: String, k: Int = 3): List<Scored> =
         RagSearch(embedder).search(store.load(strategy), query, k)
+
+    // --- День 22: RAG-ответ (два режима) + контрольный набор ---
+
+    /**
+     * Ответ на вопрос в одном из режимов. **С RAG**: ищем top-[k] чанков и передаём их LLM как контекст;
+     * **без RAG**: тот же вопрос без контекста. Эмбеддер нужен только для поиска (режим с RAG).
+     */
+    suspend fun answer(
+        gateway: LlmGateway,
+        embedder: Embedder,
+        question: String,
+        useRag: Boolean,
+        strategy: String = "structural",
+        k: Int = 6,
+    ): RagAnswer {
+        val answerer = RagAnswerer(gateway)
+        return if (useRag) answerer.withContext(question, search(embedder, strategy, question, k))
+        else answerer.plain(question)
+    }
+
+    fun goldQuestions(): List<GoldQuestion> = GoldQuestions.load()
+
+    /**
+     * Прогнать весь контрольный набор в ОБОИХ режимах (День 22, Вариант B): для каждого вопроса — ответ
+     * С RAG и без RAG. Это сравнение КАЧЕСТВА ответов (ссылки, отказ на ловушке), а не только поиска.
+     * Каждый вызов обёрнут — сетевой сбой на одном вопросе не рушит весь прогон.
+     */
+    suspend fun goldAnswers(
+        gateway: LlmGateway,
+        embedder: Embedder,
+        onProgress: (Int, Int) -> Unit = { _, _ -> },
+    ): List<GoldAnswer> {
+        val qs = goldQuestions()
+        return qs.mapIndexed { i, q ->
+            onProgress(i + 1, qs.size)
+            val rag = runCatching { answer(gateway, embedder, q.question, useRag = true) }
+                .getOrElse { RagAnswer("С RAG", "(ошибка: ${it.message})", emptyList(), null, 0) }
+            val plain = runCatching { answer(gateway, embedder, q.question, useRag = false) }
+                .getOrElse { RagAnswer("Без RAG", "(ошибка: ${it.message})", emptyList(), null, 0) }
+            GoldAnswer(q, rag, plain)
+        }
+    }
 
     fun close() = store.close()
 
