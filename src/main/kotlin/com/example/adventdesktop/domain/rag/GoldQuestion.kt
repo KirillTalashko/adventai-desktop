@@ -36,3 +36,20 @@ data class GoldAnswer(
     val ragRefused: Boolean get() = ragLooksLikeRefusal(rag.text)
     val plainRefused: Boolean get() = ragLooksLikeRefusal(plain.text)
 }
+
+/**
+ * Сравнение КАЧЕСТВА ПОИСКА по одному вопросу (День 23): какие источники дал сырой top-K (baseline) и
+ * какие — полный пайплайн с реранком/фильтром (improved). Позитивный: попал ли ожидаемый источник; для
+ * негативного [baseHit]/[improvedHit] = null, а показателен размер выдачи (мусор vs отсечён до 0).
+ */
+data class GoldRetrieval(
+    val q: GoldQuestion,
+    val baseSources: List<String>,
+    val improvedSources: List<String>,
+) {
+    val baseHit: Boolean? get() = hit(baseSources)
+    val improvedHit: Boolean? get() = hit(improvedSources)
+
+    private fun hit(srcs: List<String>): Boolean? =
+        if (q.isNegative) null else q.sources.any { exp -> srcs.any { it.equals(exp, ignoreCase = true) } }
+}
