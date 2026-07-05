@@ -160,3 +160,88 @@ class StructuralChunker(
         return out
     }
 }
+
+private val HEADING_RE = Regex("^(#{1,6})\\s+(.*)$")
+
+/** Разбить документ на разделы по markdown-заголовкам: (хлебные крошки, начало тела, конец тела). */
+internal fun headingSections(doc: RagDocument): List<Triple<String, Int, Int>> {
+    val stack = ArrayList<Pair<Int, String>>()
+    val out = ArrayList<Triple<String, Int, Int>>()
+    var offset = 0
+    var bodyStart = 0
+    var crumb = ""
+    val lines = doc.text.split("\n")
+    for ((i, line) in lines.withIndex()) {
+        val lineStart = offset
+        val m = HEADING_RE.find(line.trimEnd('\r'))
+        if (m != null) {
+            if (lineStart > bodyStart) out += Triple(crumb, bodyStart, lineStart)
+            val level = m.groupValues[1].length
+            val title = m.groupValues[2].trim()
+            while (stack.isNotEmpty() && stack.last().first >= level) stack.removeAt(stack.size - 1)
+            stack += level to title
+            crumb = stack.joinToString(" › ") { it.second }
+            bodyStart = lineStart + line.length + 1
+        }
+        offset += line.length + 1
+        if (i == lines.size - 1 && offset > bodyStart) out += Triple(crumb, bodyStart, doc.text.length)
+    }
+    if (out.isEmpty()) out += Triple("", 0, doc.text.length)
+    return out
+}
+
+/**
+ * **Стратегия 3 — `contextual` (боевая, по умолчанию для ответов, День 23).** Лучшее из structural+fixed +
+ * «contextual retrieval»:
+ * - границы по заголовкам (никогда не режем поперёк раздела) — как structural;
+ * - внутри крупного раздела — окно [targetTokens] слов с перекрытием [overlapTokens] (бэлансируем размер);
+ * - **в ТЕКСТ каждого чанка добавляем хлебные крошки «документ › раздел»** — чанк эмбеддится ВМЕСТЕ с темой,
+ *   поэтому поиск понимает, о чём кусок (вытаскивает нужный документ даже на разговорном запросе). Метаданные
+ *   `section` — те же крошки для показа источника.
+ */
+class ContextualChunker(
+    private val targetTokens: Int = 180,
+    private val overlapTokens: Int = 40,
+) : Chunker {
+    override val strategy = "contextual"
+
+    override fun chunk(doc: RagDocument): List<Chunk> {
+        val out = ArrayList<Chunk>()
+        var ordinal = 0
+        for ((crumb, s, e) in headingSections(doc)) {
+            val body = doc.text.substring(s, e)
+            if (body.isBlank()) continue
+            val header = crumb.ifBlank { doc.title }
+            for ((cs, ce) in windows(body)) {
+                val raw = body.substring(cs, ce).trim()
+                if (raw.isEmpty()) continue
+                out += Chunk(
+                    "$header\n$raw",   // контекстный префикс: тема раздела эмбеддится вместе с текстом
+                    ChunkMetadata(
+                        source = doc.source, title = doc.title, section = crumb,
+                        chunkId = "${doc.id}#contextual#$ordinal", strategy = "contextual", ordinal = ordinal,
+                        charStart = s + cs, charEnd = s + ce, approxTokens = approxTokens(raw),
+                    ),
+                )
+                ordinal++
+            }
+        }
+        return out
+    }
+
+    /** Окна по словам с перекрытием в пределах ОДНОГО раздела (не пересекая заголовки). Смещения — в теле. */
+    private fun windows(body: String): List<Pair<Int, Int>> {
+        val ws = words(body)
+        if (ws.isEmpty()) return emptyList()
+        val step = (targetTokens - overlapTokens).coerceAtLeast(1)
+        val out = ArrayList<Pair<Int, Int>>()
+        var start = 0
+        while (start < ws.size) {
+            val end = (start + targetTokens).coerceAtMost(ws.size)
+            out += ws[start].start to ws[end - 1].end
+            if (end >= ws.size) break
+            start += step
+        }
+        return out
+    }
+}

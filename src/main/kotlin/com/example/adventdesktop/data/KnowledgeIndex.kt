@@ -1,17 +1,26 @@
 package com.example.adventdesktop.data
 
 import com.example.adventdesktop.domain.LlmGateway
-import com.example.adventdesktop.domain.rag.Chunker
+import com.example.adventdesktop.domain.rag.ContextualChunker
 import com.example.adventdesktop.domain.rag.DocumentIndexer
 import com.example.adventdesktop.domain.rag.Embedder
 import com.example.adventdesktop.domain.rag.FixedSizeChunker
 import com.example.adventdesktop.domain.rag.GoldAnswer
 import com.example.adventdesktop.domain.rag.GoldQuestion
+import com.example.adventdesktop.domain.rag.GoldRetrieval
+import com.example.adventdesktop.domain.rag.HeuristicReranker
 import com.example.adventdesktop.domain.rag.IndexStats
+import com.example.adventdesktop.domain.rag.LlmReranker
+import com.example.adventdesktop.domain.rag.QueryRewriter
 import com.example.adventdesktop.domain.rag.RagAnswer
 import com.example.adventdesktop.domain.rag.RagAnswerer
 import com.example.adventdesktop.domain.rag.RagDocument
+import com.example.adventdesktop.domain.rag.RagOptions
 import com.example.adventdesktop.domain.rag.RagSearch
+import com.example.adventdesktop.domain.rag.RelevanceFilter
+import com.example.adventdesktop.domain.rag.RerankMode
+import com.example.adventdesktop.domain.rag.RetrievalTrace
+import com.example.adventdesktop.domain.rag.RewriteOutcome
 import com.example.adventdesktop.domain.rag.Scored
 import com.example.adventdesktop.domain.rag.StructuralChunker
 import java.io.File
@@ -52,7 +61,7 @@ class KnowledgeIndex(ragDir: File) {
     /** Документы из папки знаний (README/статьи/код/PDF → текст). */
     fun documents(): List<RagDocument> = DocumentLoader.loadDir(knowledgeDir)
 
-    /** Построить индекс ОБЕИХ стратегий одним эмбеддером и сохранить. Вернуть их статистику для сравнения. */
+    /** Построить индекс ВСЕХ трёх стратегий одним эмбеддером и сохранить. Вернуть их статистику для сравнения. */
     suspend fun rebuild(embedder: Embedder, onProgress: (String, Int, Int) -> Unit = { _, _, _ -> }): Comparison {
         val docs = documents()
         val indexer = DocumentIndexer(embedder)
@@ -60,7 +69,9 @@ class KnowledgeIndex(ragDir: File) {
         store.save(fixed.stats, fixed.chunks)
         val structural = indexer.build(docs, StructuralChunker()) { d, t -> onProgress("structural", d, t) }
         store.save(structural.stats, structural.chunks)
-        return Comparison(docs.size, fixed.stats, structural.stats)
+        val contextual = indexer.build(docs, ContextualChunker()) { d, t -> onProgress("contextual", d, t) }
+        store.save(contextual.stats, contextual.chunks)
+        return Comparison(docs.size, fixed.stats, structural.stats, contextual.stats)
     }
 
     fun stats(strategy: String): IndexStats? = store.stats(strategy)
@@ -69,53 +80,100 @@ class KnowledgeIndex(ragDir: File) {
     suspend fun search(embedder: Embedder, strategy: String, query: String, k: Int = 3): List<Scored> =
         RagSearch(embedder).search(store.load(strategy), query, k)
 
-    // --- День 22: RAG-ответ (два режима) + контрольный набор ---
+    // --- День 22–23: двухэтапный RAG-пайплайн (retrieve → rerank → filter) + ответ + контрольный набор ---
 
     /**
-     * Ответ на вопрос в одном из режимов. **С RAG**: ищем top-[k] чанков и передаём их LLM как контекст;
-     * **без RAG**: тот же вопрос без контекста. Эмбеддер нужен только для поиска (режим с RAG).
+     * Второй этап поиска (День 23): [rewrite] запроса → bi-encoder top-N → реранк ([RagOptions.rerank]) →
+     * фильтр по порогу → top-K. Возвращает трейс с «до/после» для наглядного сравнения.
      */
-    suspend fun answer(
-        gateway: LlmGateway,
-        embedder: Embedder,
-        question: String,
-        useRag: Boolean,
-        strategy: String = "structural",
-        k: Int = 6,
-    ): RagAnswer {
+    suspend fun retrieve(gateway: LlmGateway?, embedder: Embedder, options: RagOptions, question: String): RetrievalTrace {
+        val rw = if (options.rewrite && gateway != null) QueryRewriter(gateway).rewrite(question) else null
+        val used = rw?.query ?: question
+        val outcome = when {
+            !options.rewrite || gateway == null -> RewriteOutcome.OFF
+            rw!!.failed -> RewriteOutcome.FAILED
+            used != question -> RewriteOutcome.REWRITTEN
+            else -> RewriteOutcome.UNCHANGED
+        }
+        val pool = search(embedder, options.strategy, used, options.retrieveN)   // широкий пул bi-encoder
+        val before = pool.take(options.topK)                                     // baseline: сырой top-K по cosine
+        val reranked = when (options.rerank) {
+            RerankMode.OFF -> pool
+            RerankMode.HEURISTIC -> HeuristicReranker().rerank(used, pool)
+            RerankMode.LLM -> if (gateway != null) LlmReranker(gateway).rerank(used, pool) else HeuristicReranker().rerank(used, pool)
+        }
+        val survived = reranked.filter { it.score >= options.floor }
+        val after = survived.take(options.topK)
+        return RetrievalTrace(question, used, outcome, before, after, pool.size, survived.size, pool.size - survived.size)
+    }
+
+    /**
+     * Ответ в одном из режимов. **С RAG**: улучшенный пайплайн [retrieve] → контекст → LLM; **без RAG**: тот
+     * же вопрос без контекста. Если после фильтра пусто (вопрос не из базы) — модель честно откажет.
+     */
+    suspend fun answer(gateway: LlmGateway, embedder: Embedder, question: String, useRag: Boolean, options: RagOptions = RagOptions()): RagAnswer {
         val answerer = RagAnswerer(gateway)
-        return if (useRag) answerer.withContext(question, search(embedder, strategy, question, k))
-        else answerer.plain(question)
+        if (!useRag) return answerer.plain(question)
+        return answerer.withContext(question, retrieve(gateway, embedder, options, question).after)
+    }
+
+    /** Ответ С RAG вместе с трейсом поиска (для показа top-K до/после в панели). */
+    suspend fun answerWithTrace(gateway: LlmGateway, embedder: Embedder, question: String, options: RagOptions): Pair<RagAnswer, RetrievalTrace> {
+        val trace = retrieve(gateway, embedder, options, question)
+        return RagAnswerer(gateway).withContext(question, trace.after) to trace
     }
 
     fun goldQuestions(): List<GoldQuestion> = GoldQuestions.load()
 
-    /**
-     * Прогнать весь контрольный набор в ОБОИХ режимах (День 22, Вариант B): для каждого вопроса — ответ
-     * С RAG и без RAG. Это сравнение КАЧЕСТВА ответов (ссылки, отказ на ловушке), а не только поиска.
-     * Каждый вызов обёрнут — сетевой сбой на одном вопросе не рушит весь прогон.
-     */
+    /** Прогнать набор в ОБОИХ режимах (Вариант B): для каждого вопроса ответ С RAG (по [options]) и без RAG. */
     suspend fun goldAnswers(
         gateway: LlmGateway,
         embedder: Embedder,
+        options: RagOptions,
         onProgress: (Int, Int) -> Unit = { _, _ -> },
     ): List<GoldAnswer> {
         val qs = goldQuestions()
         return qs.mapIndexed { i, q ->
             onProgress(i + 1, qs.size)
-            val rag = runCatching { answer(gateway, embedder, q.question, useRag = true) }
+            val rag = runCatching { answer(gateway, embedder, q.question, useRag = true, options) }
                 .getOrElse { RagAnswer("С RAG", "(ошибка: ${it.message})", emptyList(), null, 0) }
-            val plain = runCatching { answer(gateway, embedder, q.question, useRag = false) }
+            val plain = runCatching { answer(gateway, embedder, q.question, useRag = false, options) }
                 .getOrElse { RagAnswer("Без RAG", "(ошибка: ${it.message})", emptyList(), null, 0) }
             GoldAnswer(q, rag, plain)
         }
     }
 
+    /**
+     * Сравнение КАЧЕСТВА ПОИСКА «без фильтра vs с фильтром» по набору (День 23) — детерминированно (без LLM,
+     * если [RagOptions.rewrite] выкл): baseline = сырой top-K по cosine; improved = полный пайплайн retrieve.
+     */
+    suspend fun goldRetrieval(
+        gateway: LlmGateway?,
+        embedder: Embedder,
+        options: RagOptions,
+        onProgress: (Int, Int) -> Unit = { _, _ -> },
+    ): List<GoldRetrieval> {
+        val qs = goldQuestions()
+        return qs.mapIndexed { i, q ->
+            onProgress(i + 1, qs.size)
+            // baseline = «как в Дне 22»: структурная стратегия, сырой top-K по cosine, без реранка/фильтра.
+            val base = search(embedder, BASELINE_STRATEGY, q.question, options.topK).map { it.chunk.meta.source }.distinct()
+            // improved = День 23: контекстная стратегия + реранк + фильтр по порогу.
+            val improved = retrieve(gateway, embedder, options, q.question).after.map { it.chunk.meta.source }.distinct()
+            GoldRetrieval(q, base, improved)
+        }
+    }
+
     fun close() = store.close()
 
-    /** Сводка сравнения двух стратегий chunking (для dev-панели/отчёта). */
-    data class Comparison(val docCount: Int, val fixed: IndexStats, val structural: IndexStats)
+    /** Сводка сравнения трёх стратегий chunking (для dev-панели/отчёта). */
+    data class Comparison(val docCount: Int, val fixed: IndexStats, val structural: IndexStats, val contextual: IndexStats)
 
     private fun readResource(path: String): ByteArray? =
         javaClass.classLoader.getResourceAsStream(path)?.use { it.readBytes() }
+
+    private companion object {
+        /** База сравнения Дня 23 = поведение Дня 22 (структурная стратегия без реранка/фильтра). */
+        const val BASELINE_STRATEGY = "structural"
+    }
 }

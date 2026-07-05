@@ -24,8 +24,12 @@ import com.example.adventdesktop.data.OllamaEmbedder
 import com.example.adventdesktop.data.HashingEmbedder
 import com.example.adventdesktop.domain.rag.Embedder
 import com.example.adventdesktop.domain.rag.GoldAnswer
+import com.example.adventdesktop.domain.rag.GoldRetrieval
 import com.example.adventdesktop.domain.rag.IndexStats
 import com.example.adventdesktop.domain.rag.RagAnswer
+import com.example.adventdesktop.domain.rag.RagOptions
+import com.example.adventdesktop.domain.rag.RerankMode
+import com.example.adventdesktop.domain.rag.RetrievalTrace
 import com.example.adventdesktop.domain.Account
 import com.example.adventdesktop.domain.Awaiting
 import com.example.adventdesktop.domain.BUILT_IN_INVARIANTS
@@ -85,7 +89,7 @@ data class RagStrategyView(
 )
 
 /** Сравнение двух стратегий chunking (fixed vs structural) + число документов. */
-data class RagComparisonView(val docCount: Int, val fixed: RagStrategyView, val structural: RagStrategyView)
+data class RagComparisonView(val docCount: Int, val fixed: RagStrategyView, val structural: RagStrategyView, val contextual: RagStrategyView)
 
 /** Тулы пайплайна композиции (День 19). Их НЕ отдаём основному агенту-консультанту — только пайплайн-демо. */
 private val PIPELINE_TOOL_NAMES = setOf("visa_search", "visa_summarize", "save_report")
@@ -760,7 +764,8 @@ class ChatState(
         ragDocCount = k.documents().size
         val f = k.stats("fixed")
         val s = k.stats("structural")
-        ragComparison = if (f != null && s != null) RagComparisonView(ragDocCount, f.toView(), s.toView()) else null
+        val c = k.stats("contextual")
+        ragComparison = if (f != null && s != null && c != null) RagComparisonView(ragDocCount, f.toView(), s.toView(), c.toView()) else null
     }
 
     fun closeRag() { ragOpen = false }
@@ -778,7 +783,7 @@ class ChatState(
             runCatching {
                 k.rebuild(emb) { strat, done, total -> ragProgress = "$strat: $done/$total чанков" }
             }.onSuccess {
-                ragComparison = RagComparisonView(it.docCount, it.fixed.toView(), it.structural.toView())
+                ragComparison = RagComparisonView(it.docCount, it.fixed.toView(), it.structural.toView(), it.contextual.toView())
                 ragProgress = ""
                 ragNote = "Индекс построен (эмбеддер ${emb.id}) для $ragDocCount документов."
             }.onFailure {
@@ -810,7 +815,25 @@ class ChatState(
     var goldAnswers by mutableStateOf<List<GoldAnswer>>(emptyList())
         private set
 
-    /** Сравнить ответ агента С RAG и БЕЗ RAG на текущем вопросе ([ragQuery]) — ядро задания Дня 22. */
+    // --- День 23: улучшенный поиск (стратегия contextual + реранк + порог + query rewrite) ---
+    // Опции пайплайна — публично-изменяемые из панели (без setX, чтобы не конфликтовать со сгенерированными сеттерами).
+    var ragStrategy by mutableStateOf("contextual")
+    var ragRerank by mutableStateOf(RerankMode.HEURISTIC)
+    var ragRewrite by mutableStateOf(false)
+    var ragFloor by mutableStateOf(0.50f)
+    var ragTrace by mutableStateOf<RetrievalTrace?>(null)
+        private set
+    var goldRetrievalRunning by mutableStateOf(false)
+        private set
+    var goldRetrievalProgress by mutableStateOf("")
+        private set
+    var goldRetrieval by mutableStateOf<List<GoldRetrieval>>(emptyList())
+        private set
+
+    /** Текущие настройки пайплайна из состояния панели. */
+    private fun ragOptions() = RagOptions(strategy = ragStrategy, rerank = ragRerank, rewrite = ragRewrite, floor = ragFloor)
+
+    /** Сравнить ответ агента С RAG и БЕЗ RAG на текущем вопросе ([ragQuery]). С RAG — по [ragOptions]. */
     fun ragCompare() {
         val q = ragQuery.trim()
         val gw = client
@@ -820,12 +843,15 @@ class ChatState(
         ragNote = null
         ragAnswerRag = null
         ragAnswerPlain = null
+        ragTrace = null
         scope.launch {
             val emb = newEmbedder()
             runCatching {
                 val k = knowledge()
-                ragAnswerPlain = k.answer(gw, emb, q, useRag = false)   // без RAG — из общих знаний модели
-                ragAnswerRag = k.answer(gw, emb, q, useRag = true)      // с RAG — по нашей базе, со ссылками
+                ragAnswerPlain = k.answer(gw, emb, q, useRag = false)          // без RAG — из общих знаний модели
+                val (ans, trace) = k.answerWithTrace(gw, emb, q, ragOptions())  // с RAG — улучшенный пайплайн
+                ragAnswerRag = ans
+                ragTrace = trace
             }.onFailure { ragNote = "Ошибка ответа: ${it.message}" }
             (emb as? OllamaEmbedder)?.close()
             ragAnswering = false
@@ -851,11 +877,32 @@ class ChatState(
         scope.launch {
             val emb = newEmbedder()
             runCatching {
-                knowledge().goldAnswers(gw, emb) { i, n -> goldProgress = "вопрос $i/$n" }
+                knowledge().goldAnswers(gw, emb, ragOptions()) { i, n -> goldProgress = "вопрос $i/$n" }
             }.onSuccess { goldAnswers = it; goldProgress = "" }
                 .onFailure { ragNote = "Ошибка прогона набора: ${it.message}"; goldProgress = "" }
             (emb as? OllamaEmbedder)?.close()
             goldRunning = false
+        }
+    }
+
+    /**
+     * День 23: сравнить КАЧЕСТВО ПОИСКА по набору «без фильтра vs с фильтром» — детерминированно (без LLM,
+     * если query rewrite выкл). Показывает, что реранк+фильтр поднимают recall и отсекают мусор на ловушке.
+     */
+    fun runGoldRetrieval() {
+        if (goldRetrievalRunning) return
+        goldRetrievalRunning = true
+        ragNote = null
+        goldRetrieval = emptyList()
+        goldRetrievalProgress = "Подготовка…"
+        scope.launch {
+            val emb = newEmbedder()
+            runCatching {
+                knowledge().goldRetrieval(client, emb, ragOptions()) { i, n -> goldRetrievalProgress = "вопрос $i/$n" }
+            }.onSuccess { goldRetrieval = it; goldRetrievalProgress = "" }
+                .onFailure { ragNote = "Ошибка сравнения поиска: ${it.message}"; goldRetrievalProgress = "" }
+            (emb as? OllamaEmbedder)?.close()
+            goldRetrievalRunning = false
         }
     }
 

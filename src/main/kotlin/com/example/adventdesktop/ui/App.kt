@@ -51,6 +51,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -92,8 +93,13 @@ import com.example.adventdesktop.domain.Message
 import com.example.adventdesktop.domain.Role
 import com.example.adventdesktop.domain.TokenUsage
 import com.example.adventdesktop.domain.rag.GoldAnswer
+import com.example.adventdesktop.domain.rag.GoldRetrieval
 import com.example.adventdesktop.domain.rag.RagAnswer
 import com.example.adventdesktop.domain.rag.RagSource
+import com.example.adventdesktop.domain.rag.RerankMode
+import com.example.adventdesktop.domain.rag.RetrievalTrace
+import com.example.adventdesktop.domain.rag.RewriteOutcome
+import com.example.adventdesktop.domain.rag.Scored
 import com.example.adventdesktop.domain.rag.ragLooksLikeRefusal
 
 private val LogoBg = Color(0xFFDADAD6)
@@ -554,6 +560,7 @@ private fun RagDialog(state: ChatState) {
                         "С RAG: по найденным фрагментам вашей базы, со ссылками; если данных нет — честно скажет.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                RagPipelineControls(state)
                 OutlinedTextField(
                     value = state.ragQuery, onValueChange = { state.ragQuery = it },
                     label = { Text("Вопрос") }, singleLine = true, modifier = Modifier.fillMaxWidth()
@@ -584,6 +591,7 @@ private fun RagDialog(state: ChatState) {
                 }
                 rag?.let { RagAnswerCard(it, warn = false, whatIs = "по вашей базе — со ссылками на источники") }
                 if (rag != null && rag.sources.isNotEmpty()) RagEvidence(rag.sources, ragLooksLikeRefusal(rag.text))
+                state.ragTrace?.let { RagTraceView(it) }
                 if (rag != null && plain != null) {
                     Surface(color = AppColors.accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -598,12 +606,32 @@ private fun RagDialog(state: ChatState) {
                     }
                 }
 
-                // === Шаг 3 — контрольный набор (сравнение качества ответов) ===
+                // === Шаг 3 — сравнение качества на 10 контрольных вопросах ===
                 HorizontalDivider()
                 Text("Шаг 3 · Проверить на 10 контрольных вопросах", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = AppColors.accent)
+
                 Text(
-                    "Прогоняем все 10 вопросов в обоих режимах и сравниваем качество: с RAG — ответ со ссылкой на нужный источник, " +
-                        "а на вопросе-ловушке честный отказ; без RAG — без ссылок, а на ловушке модель выдумывает.",
+                    "А. Насколько хорошо работает ПОИСК (без участия LLM). Прогоняем 10 вопросов и смотрим, находит ли " +
+                        "поиск ПРАВИЛЬНЫЙ документ, чтобы по нему ответить. Сравниваем старый поиск (День 22) и новый " +
+                        "(День 23: умная нарезка + реранк + порог). Чем лучше поиск — тем реже промахи и меньше мусора на " +
+                        "вопросах, которых в базе нет.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = { state.runGoldRetrieval() },
+                        enabled = state.ragComparison != null && !state.goldRetrievalRunning,
+                        colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)
+                    ) { Text("Сравнить поиск (без/с фильтром)") }
+                    if (state.goldRetrievalRunning) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                        Text(state.goldRetrievalProgress, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                if (state.goldRetrieval.isNotEmpty()) GoldRetrievalView(state.goldRetrieval)
+
+                Text(
+                    "Б. Качество ОТВЕТОВ в обоих режимах (нужен LLM): с RAG — ответ со ссылкой + отказ на ловушке; без RAG — без ссылок, на ловушке выдумка.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -611,7 +639,7 @@ private fun RagDialog(state: ChatState) {
                         onClick = { state.runGoldAnswers() },
                         enabled = state.ragComparison != null && !state.goldRunning,
                         colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)
-                    ) { Text("Прогнать 10 вопросов") }
+                    ) { Text("Прогнать ответы (10 вопросов)") }
                     if (state.goldRunning) {
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
                         Text(state.goldProgress, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -621,6 +649,136 @@ private fun RagDialog(state: ChatState) {
             }
         }
     )
+}
+
+private fun rerankLabel(m: RerankMode): String = when (m) {
+    RerankMode.OFF -> "Выкл"; RerankMode.HEURISTIC -> "Эвристика"; RerankMode.LLM -> "LLM"
+}
+
+private fun hitMark(h: Boolean?): String = when (h) { true -> "✓"; false -> "✗"; else -> "—" }
+
+/** Настройки улучшенного поиска (День 23): стратегия, реранк, query rewrite, порог отсечения. */
+@Composable
+private fun RagPipelineControls(state: ChatState) {
+    Surface(color = AppColors.accent.copy(alpha = 0.05f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Улучшенный поиск (День 23)", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Стратегия:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                DropdownChip(state.ragStrategy, listOf("contextual", "structural", "fixed"), { it }) { state.ragStrategy = it }
+                Text("Реранк:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                DropdownChip(rerankLabel(state.ragRerank), RerankMode.entries.toList(), { rerankLabel(it) }) { state.ragRerank = it }
+            }
+            ConnectorToggleRow("Query rewrite (LLM)", "переписать вопрос в поисковый запрос перед эмбеддингом", state.ragRewrite) { state.ragRewrite = it }
+            if (state.ragRewrite) RewriteStatusLine(state.ragTrace)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Порог: %.2f".format(state.ragFloor), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Slider(value = state.ragFloor, onValueChange = { state.ragFloor = it }, valueRange = 0f..1f, modifier = Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+/**
+ * Индикатор под тумблером «Query rewrite»: по последнему прогону показывает, ПЕРЕПИСАЛ ли LLM запрос,
+ * вернул то же или вызов упал — чтобы наглядно видеть, что тумблер реально что-то делает.
+ */
+@Composable
+private fun RewriteStatusLine(t: RetrievalTrace?) {
+    val onVar = MaterialTheme.colorScheme.onSurfaceVariant
+    val (text, color) = when (t?.rewrite) {
+        null, RewriteOutcome.OFF ->
+            "включён — задайте вопрос и запустите поиск, чтобы увидеть результат" to onVar
+        RewriteOutcome.REWRITTEN ->
+            "✏ переписал: «${t.originalQuery}» → «${t.usedQuery}»" to AppColors.accent
+        RewriteOutcome.UNCHANGED ->
+            "✔ вернул то же (вопрос уже краткий — переписывать нечего)" to onVar
+        RewriteOutcome.FAILED ->
+            "⚠ вызов не удался (сеть/лимит) — искали по исходному вопросу" to MaterialTheme.colorScheme.error
+    }
+    Text(text, style = MaterialTheme.typography.labelSmall, color = color, modifier = Modifier.padding(start = 4.dp))
+}
+
+/** Трейс второго этапа: переписанный запрос + top-K ДО (cosine) и ПОСЛЕ (реранк+фильтр) — видно реордер/отсев. */
+@Composable
+private fun RagTraceView(t: RetrievalTrace) {
+    @Composable
+    fun hits(list: List<Scored>, color: androidx.compose.ui.graphics.Color) = list.forEach { s ->
+        Text("  %.3f · %s › %s".format(s.score, s.chunk.meta.source, s.chunk.meta.section.ifBlank { "-" }), style = MaterialTheme.typography.labelSmall, color = color)
+    }
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text("Второй этап поиска (реранк + фильтр)", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelSmall, color = AppColors.accent)
+            when (t.rewrite) {
+                RewriteOutcome.REWRITTEN -> Text("Query rewrite: «${t.originalQuery}» → «${t.usedQuery}»", style = MaterialTheme.typography.labelSmall, color = AppColors.accent)
+                RewriteOutcome.UNCHANGED -> Text("Query rewrite включён, но запрос не изменился (вопрос уже краткий).", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                RewriteOutcome.FAILED -> Text("Query rewrite не сработал (сеть/лимит) — искали по исходному вопросу.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                RewriteOutcome.OFF -> {}
+            }
+            Text("Пул: ${t.poolSize} → после порога: ${t.survived} (отсёк ${t.droppedByFilter}) → в ответ: ${t.after.size}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("top-K ДО (сырой cosine):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            hits(t.before, MaterialTheme.colorScheme.onSurface)
+            Text("top-K ПОСЛЕ (реранк+фильтр):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (t.after.isEmpty()) Text("  — пусто: нерелевантно → честный отказ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+            else hits(t.after, AppColors.accent)
+        }
+    }
+}
+
+/** Сравнение качества поиска по набору: понятная сводка + разбор «старый поиск → новый поиск». */
+@Composable
+private fun GoldRetrievalView(items: List<GoldRetrieval>) {
+    val pos = items.filter { !it.q.isNegative }
+    val baseHit = pos.count { it.baseHit == true }
+    val impHit = pos.count { it.improvedHit == true }
+    val fixedCount = pos.count { it.baseHit != true && it.improvedHit == true }
+    val neg = items.firstOrNull { it.q.isNegative }
+    Surface(color = AppColors.accent.copy(alpha = 0.06f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text("Итог: старый поиск → новый поиск", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
+            Text(
+                "Нашли ПРАВИЛЬНЫЙ документ: было $baseHit из ${pos.size} → стало $impHit из ${pos.size}" +
+                    if (fixedCount > 0) " (починено вопросов: $fixedCount)." else ".",
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface
+            )
+            neg?.let {
+                Text(
+                    "Вопрос-ловушка (ответа в базе нет): старый поиск притащил ${it.baseSources.size} лишних кусок(ов) — по ним модель могла бы выдумать; " +
+                        "новый — ${it.improvedSources.size}" + if (it.improvedSources.isEmpty()) " (ничего → агент честно откажется)." else ".",
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            HorizontalDivider()
+            items.forEach { r -> GoldRetrievalRow(r) }
+        }
+    }
+}
+
+/** Одна строка сравнения поиска: вопрос + какой документ нужен + вердикт «было → стало» (без шумных списков). */
+@Composable
+private fun GoldRetrievalRow(r: GoldRetrieval) {
+    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        Text("#${r.q.id}. ${r.q.question}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
+        if (r.q.isNegative) {
+            Text(
+                "В базе ответа нет. Было: нашёл ${r.baseSources.size} лишних кусок(ов) → стало: ${r.improvedSources.size}" +
+                    if (r.improvedSources.isEmpty()) " (ничего → отказ)" else "",
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            val flipped = r.baseHit != true && r.improvedHit == true
+            val verdict = when {
+                flipped -> "починено: раньше не находили → теперь находим"
+                r.improvedHit == true -> "нашли (было и осталось верно)"
+                else -> "не нашли"
+            }
+            Text(
+                "Нужен: ${r.q.sources.joinToString(" / ")} · было ${hitMark(r.baseHit)} → стало ${hitMark(r.improvedHit)} — $verdict",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (flipped) AppColors.accent else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
 }
 
 /** Карточка ответа одного режима: ярлык (режим + «что это»), техстрока, текст, использованные источники. */
@@ -721,28 +879,28 @@ private fun GoldAnswerRow(a: GoldAnswer) {
 @Composable
 private fun RagComparisonTable(cmp: RagComparisonView) {
     @Composable
-    fun row(label: String, fixed: String, structural: String, header: Boolean = false) {
+    fun row(label: String, fixed: String, structural: String, contextual: String, header: Boolean = false) {
         val weight = if (header) FontWeight.SemiBold else FontWeight.Normal
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(label, Modifier.weight(1.4f), style = MaterialTheme.typography.labelSmall, fontWeight = weight, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(label, Modifier.weight(1.5f), style = MaterialTheme.typography.labelSmall, fontWeight = weight, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(fixed, Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, fontWeight = weight)
             Text(structural, Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, fontWeight = weight)
+            Text(contextual, Modifier.weight(1.1f), style = MaterialTheme.typography.labelSmall, fontWeight = weight, color = if (header) AppColors.accent else Color.Unspecified)
         }
     }
     Surface(color = AppColors.accent.copy(alpha = 0.06f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             val f = cmp.fixed
             val s = cmp.structural
-            row("", "fixed", "structural", header = true)
-            row("чанков", "${f.chunks}", "${s.chunks}")
-            row("ср. символов", "${f.avgChars}", "${s.avgChars}")
-            row("мин/макс", "${f.minChars}/${f.maxChars}", "${s.minChars}/${s.maxChars}")
-            row("ср. токенов", "${f.avgTokens}", "${s.avgTokens}")
-            row("разделов (section)", "${f.sections}", "${s.sections}")
-            row("время, мс", "${f.buildMs}", "${s.buildMs}")
-            row("эмбеддер", f.embedderId, s.embedderId)
+            val c = cmp.contextual
+            row("", "fixed", "structural", "contextual★", header = true)
+            row("чанков", "${f.chunks}", "${s.chunks}", "${c.chunks}")
+            row("ср. символов", "${f.avgChars}", "${s.avgChars}", "${c.avgChars}")
+            row("ср. токенов", "${f.avgTokens}", "${s.avgTokens}", "${c.avgTokens}")
+            row("разделов", "${f.sections}", "${s.sections}", "${c.sections}")
+            row("время, мс", "${f.buildMs}", "${s.buildMs}", "${c.buildMs}")
             Text(
-                "Вывод: fixed режет по фикс. размеру равномерно, но разделы не сохранены (section=0) — мысль может рваться на стыке. structural=раздел: метаданные section заполнены → в ответе агента виден источник (файл › раздел).",
+                "★ contextual — боевая стратегия (День 23): границы по разделам + размер/overlap + хлебные крошки «документ › раздел» в тексте чанка (эмбеддится с темой). Она — по умолчанию для ответов; fixed/structural остались для сравнения.",
                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp)
             )
