@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -83,6 +84,8 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.font.FontFamily
 import java.awt.Desktop
 import java.net.URI
 import androidx.compose.ui.text.style.TextOverflow
@@ -1044,6 +1047,8 @@ private fun ConnectorsDialog(state: ChatState) {
                 ConnectorToggleRow("MCP — visa-info", "удалённый сервер: актуальные требования, поиск, дайджест", state.mcpEnabled) { state.setMcpEnabled(it) }
                 ConnectorToggleRow("MCP — server-everything (стороннее)", "локальный npx-сервер по stdio: echo, add… (второй MCP через маршрутизатор)", state.extraMcpEnabled) { state.setExtraMcpEnabled(it) }
                 HorizontalDivider()
+                ConnectorToggleRow("RAG в агенте", "внутренняя база знаний (50 док.): выдержки + источники в ответах агента", state.ragInAgentEnabled) { state.setRagInAgentEnabled(it) }
+                HorizontalDivider()
                 ConnectorToggleRow("Skill — документы", "локально: visa-cli docs (проверка приложенных файлов)", state.skillDocsEnabled) { state.setSkillDocsEnabled(it) }
                 ConnectorToggleRow("Skill — автоулучшение промтов", "локально: анализ диалогов и точечные предложения", state.skillPromptTuneEnabled) { state.setSkillPromptTuneEnabled(it) }
                 HorizontalDivider()
@@ -1386,7 +1391,7 @@ private fun MessageView(message: Message) {
             Text("Визовый специалист", style = MaterialTheme.typography.labelMedium, color = AppColors.accent, fontWeight = FontWeight.SemiBold)
             parseSegments(message.text).forEach { seg ->
                 when (seg) {
-                    is Segment.Plain -> Text(linkify(seg.text, AppColors.accent), color = MaterialTheme.colorScheme.onSurface)
+                    is Segment.Plain -> MarkdownText(seg.text, AppColors.accent)
                     is Segment.Checklist -> ChecklistView(seg.items)
                 }
             }
@@ -1443,25 +1448,71 @@ private fun statusColor(status: String): Color {
 // --- Парсинг блока [checklist] ---
 
 private val URL_REGEX = Regex("https?://[^\\s)\\]]+")
+private val MD_HEADING = Regex("^#{1,6}\\s+(.*)$")
+private val MD_BULLET = Regex("^(\\s*)[-*]\\s+(.*)$")
 
-/** Превращает голые URL в тексте в кликабельные ссылки (по клику открывается системный браузер). */
-private fun linkify(text: String, accent: Color): AnnotatedString = buildAnnotatedString {
-    var last = 0
-    for (m in URL_REGEX.findAll(text)) {
-        append(text.substring(last, m.range.first))
-        val raw = m.value
-        val url = raw.trimEnd('.', ',', ';', ')', '»', '"', '!', '?')   // не цеплять хвостовую пунктуацию
-        val styles = TextLinkStyles(SpanStyle(color = accent, textDecoration = TextDecoration.Underline))
-        withLink(LinkAnnotation.Url(url, styles) { link ->
-            runCatching {
-                val u = (link as? LinkAnnotation.Url)?.url ?: return@runCatching
-                if (Desktop.isDesktopSupported()) Desktop.getDesktop().browse(URI(u))
+/** Открыть URL в системном браузере (по клику на ссылку в ответе). */
+private fun openUrl(url: String) {
+    runCatching { if (Desktop.isDesktopSupported()) Desktop.getDesktop().browse(URI(url)) }
+}
+
+/**
+ * Лёгкий рендер Markdown из ответа LLM (без внешней зависимости — важно из-за оффлайн-Gradle). Модель шлёт
+ * `**жирный**`, `##` заголовки, `- списки`, `` `код` `` и голые ссылки; без разбора они видны сырыми символами.
+ * Разбираем построчно: заголовок/пункт списка/абзац; внутри строки — [inlineMd] (жирный/код/ссылки).
+ */
+@Composable
+private fun MarkdownText(text: String, accent: Color) {
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        text.split('\n').forEach { raw ->
+            val line = raw.trimEnd()
+            val heading = MD_HEADING.matchEntire(line.trimStart())
+            val bullet = MD_BULLET.matchEntire(line)
+            when {
+                line.isBlank() -> Spacer(Modifier.height(3.dp))
+                heading != null -> Text(
+                    inlineMd(heading.groupValues[1], accent), color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall
+                )
+                bullet != null -> {
+                    val indent = ((bullet.groupValues[1].length / 2) * 14).dp
+                    Row(Modifier.padding(start = indent), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("•", color = accent)
+                        Text(inlineMd(bullet.groupValues[2], accent), color = MaterialTheme.colorScheme.onSurface)
+                    }
+                }
+                else -> Text(inlineMd(line, accent), color = MaterialTheme.colorScheme.onSurface)
             }
-        }) { append(url) }
-        if (raw.length > url.length) append(raw.substring(url.length))
-        last = m.range.last + 1
+        }
     }
-    if (last < text.length) append(text.substring(last))
+}
+
+/** Инлайн-разметка одной строки: `**жирный**`, `` `код` `` и кликабельные ссылки. Незакрытые маркеры — как есть. */
+private fun inlineMd(text: String, accent: Color): AnnotatedString = buildAnnotatedString {
+    var i = 0
+    while (i < text.length) {
+        when {
+            text.startsWith("**", i) -> {
+                val end = text.indexOf("**", i + 2)
+                if (end < 0) { append("**"); i += 2 }
+                else { withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(text.substring(i + 2, end)) }; i = end + 2 }
+            }
+            text[i] == '`' -> {
+                val end = text.indexOf('`', i + 1)
+                if (end < 0) { append('`'); i += 1 }
+                else { withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = accent)) { append(text.substring(i + 1, end)) }; i = end + 1 }
+            }
+            text.startsWith("http://", i) || text.startsWith("https://", i) -> {
+                val raw = URL_REGEX.find(text, i)?.value ?: text.substring(i)
+                val url = raw.trimEnd('.', ',', ';', ')', '»', '"', '!', '?')   // не цеплять хвостовую пунктуацию
+                val styles = TextLinkStyles(SpanStyle(color = accent, textDecoration = TextDecoration.Underline))
+                withLink(LinkAnnotation.Url(url, styles) { link -> (link as? LinkAnnotation.Url)?.url?.let(::openUrl) }) { append(url) }
+                if (raw.length > url.length) append(raw.substring(url.length))
+                i += raw.length
+            }
+            else -> { append(text[i]); i += 1 }
+        }
+    }
 }
 
 internal sealed interface Segment {

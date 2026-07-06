@@ -1,5 +1,7 @@
 package com.example.adventdesktop.domain
 
+import com.example.adventdesktop.domain.rag.KnowledgeHit
+import com.example.adventdesktop.domain.rag.KnowledgeRetriever
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -37,6 +39,12 @@ class TaskOrchestrator(
      * одиночный валидатор. Консилиум перекрёстно ловит то, что один проверяющий упускает.
      */
     private val consiliumSize: Int = 3,
+    /**
+     * День 25: поиск по ВНУТРЕННЕЙ базе знаний (RAG). На отвечающих стадиях (INTAKE/ASSIST/EXECUTION) перед
+     * вызовом LLM достаём релевантные выдержки и кладём блоком [БАЗА ЗНАНИЙ] в промпт + возвращаем источники.
+     * Аддитивно к MCP: RAG — внутренние документы с цитатами, MCP ([СПРАВКА]) — живые офиц. ссылки. null = выкл.
+     */
+    private val retriever: KnowledgeRetriever? = null,
 ) {
     /** Активные инварианты аккаунта (День 14) — инжектятся во все стадийные запросы. Обновляет [ChatState]. */
     var invariants: List<Invariant> = emptyList()
@@ -75,10 +83,12 @@ class TaskOrchestrator(
         val seededCase = seedCitizenship(updatedCase, profile)
         val ctx = ctx0.copy(caseFile = seededCase)
 
+        // День 25: поиск во внутренней базе знаний (RAG) под последний вопрос — выдержки + источники в ответ.
+        val (ragBlock, hits) = ragContext(ctx, history)
         // 2) Интервьюер ВЕДЁТ разговор, видя актуальное [ДОСЬЕ]; классифицирует и спрашивает недостающее.
-        val resp = call(INTERVIEWER, ctx, history, profile, INTAKE_INSTRUCTION, guarded = true, useTools = true, roleId = TunableRole.INTERVIEWER.id)
+        val resp = call(INTERVIEWER, ctx, history, profile, INTAKE_INSTRUCTION, guarded = true, useTools = true, roleId = TunableRole.INTERVIEWER.id, ragBlock = ragBlock)
         val shown = withTrace(resp, ctx.docs)
-        if (hasTag(resp.text, "SIMPLE")) return@runCatching TaskStep(AgentReply(shown, resp.usage), ctx0, cancel = true)
+        if (hasTag(resp.text, "SIMPLE")) return@runCatching TaskStep(AgentReply(shown, resp.usage, hits), ctx0, cancel = true)
 
         // День 19: если интервьюер уже вызвал get_visa_requirements — переиспользуем его синтез (актуальные
         // данные + ОФИЦ. ссылки), кладём в [research], чтобы цитировали все стадии без повторного платного вызова.
@@ -86,9 +96,9 @@ class TaskOrchestrator(
 
         // 3) Готовность к плану решает КОД по досье (а не флака-тег).
         if (seededCase.isReadyForPlan) {
-            TaskStep(AgentReply(shown, resp.usage), ctxR.copy(awaiting = Awaiting.NONE, prompt = "").transitionTo(TaskState.PLANNING))
+            TaskStep(AgentReply(shown, resp.usage, hits), ctxR.copy(awaiting = Awaiting.NONE, prompt = "").transitionTo(TaskState.PLANNING))
         } else {
-            TaskStep(AgentReply(shown, resp.usage), ctxR.copy(awaiting = Awaiting.ANSWER, prompt = clean(resp.text)))
+            TaskStep(AgentReply(shown, resp.usage, hits), ctxR.copy(awaiting = Awaiting.ANSWER, prompt = clean(resp.text)))
         }
     }
 
@@ -197,7 +207,9 @@ class TaskOrchestrator(
             "Не возвращайся к прошлым шагам и не забегай вперёд. Используй [СПРАВКА ПО ВИЗЕ] и приводи официальные ССЫЛКИ. " +
             "Заверши строкой [STEP_RESULT] <что сделано по ЭТОМУ шагу>. " +
             "Если нужен документ пользователя — добавь [NEED_DOC] <короткий ярлык, 2–4 слова>."
-        val resp = call(EXECUTOR, ctx, history, profile, instruction, historyLimit = 6, guarded = true, useTools = true, roleId = TunableRole.EXECUTOR.id, params = LlmParams(temperature = TEMP_PRECISE))
+        // День 25: RAG под ТЕКУЩИЙ шаг (запрос = текст шага + страна/цель) — выдержки базы + источники.
+        val (ragBlock, hits) = ragContext(ctx, history, queryOverride = ctx.current)
+        val resp = call(EXECUTOR, ctx, history, profile, instruction, historyLimit = 6, guarded = true, useTools = true, roleId = TunableRole.EXECUTOR.id, ragBlock = ragBlock, params = LlmParams(temperature = TEMP_PRECISE))
         val needDoc = parseTagged(resp.text, "NEED_DOC")
         val result = parseTagged(resp.text, "STEP_RESULT") ?: "шаг ${ctx.step + 1} выполнен"
         // Документы НЕ блокируют: нужный файл уходит в «понадобится позже», шаг всегда продвигается (#3, #4).
@@ -206,7 +218,7 @@ class TaskOrchestrator(
             pending = addPending(ctx.pending, needDoc), step = ctx.step + 1, awaiting = Awaiting.NONE, prompt = ""
         )
         val next = if (advanced.total > 0 && advanced.step >= advanced.total) advanced.transitionTo(TaskState.VALIDATION) else advanced
-        return TaskStep(AgentReply(withTrace(resp, ctx.docs), resp.usage), next)
+        return TaskStep(AgentReply(withTrace(resp, ctx.docs), resp.usage, hits), next)
     }
 
     /** Аккуратно добавить документ в «понадобится позже»: короткий ярлык, без дублей и без раздувания (#4). */
@@ -286,22 +298,56 @@ class TaskOrchestrator(
 
     /** Ответ на вопрос/реплику пользователя в контексте задачи БЕЗ изменения автомата (#2). Распознаёт разворот. */
     suspend fun assist(ctx: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatching {
-        val resp = call(ASSISTANT, ctx, history, profile, ASSIST_INSTRUCTION, historyLimit = 8, guarded = true, useTools = true, roleId = TunableRole.ASSISTANT.id)
+        val (ragBlock, hits) = ragContext(ctx, history)   // День 25: контекст из внутренней базы под вопрос
+        val resp = call(ASSISTANT, ctx, history, profile, ASSIST_INSTRUCTION, historyLimit = 8, guarded = true, useTools = true, roleId = TunableRole.ASSISTANT.id, ragBlock = ragBlock)
         val shown = withTrace(resp, ctx.docs)
         // Пользователь хочет ДРУГУЮ страну/цель → ассистент пометил [PIVOT] <страна>: ждём подтверждения, план не трогаем.
         val pivot = parseTagged(resp.text, "PIVOT")
         if (pivot != null) {
-            return@runCatching TaskStep(AgentReply(shown, resp.usage), ctx.copy(awaiting = Awaiting.ANSWER, prompt = clean(resp.text), pivotTo = pivot))
+            return@runCatching TaskStep(AgentReply(shown, resp.usage, hits), ctx.copy(awaiting = Awaiting.ANSWER, prompt = clean(resp.text), pivotTo = pivot))
         }
-        TaskStep(AgentReply(shown, resp.usage), ctx)
+        TaskStep(AgentReply(shown, resp.usage, hits), ctx)
     }
 
-    /** Префикс-трейс вызванных инструментов — видно в чате, что агент сходил в MCP (Фаза 2). */
+    /** Префикс-трейс вызванных инструментов — видно в чате, что агент сходил в MCP (Фаза 2), но по-человечески. */
     private fun withTrace(resp: GatewayResponse, docs: List<String>): String {
         val body = reconcileChecklist(clean(resp.text), docs)
-        if (resp.toolCalls.isEmpty()) return body
-        val header = resp.toolCalls.joinToString("\n") { "🔧 $it" }
+        val traces = friendlyToolTraces(resp)
+        if (traces.isEmpty()) return body
+        val header = traces.joinToString("\n")
         return if (body.isEmpty()) header else "$header\n\n$body"
+    }
+
+    /**
+     * Человекочитаемый след вызванных инструментов вместо сырого `name({"json":…})` — понятно обычному
+     * пользователю, а не разработчику. Берём структурные вызовы ([GatewayResponse.toolResults]); если их нет —
+     * парсим строковый след.
+     */
+    private fun friendlyToolTraces(resp: GatewayResponse): List<String> {
+        val calls = if (resp.toolResults.isNotEmpty()) resp.toolResults.map { it.name to it.args }
+        else resp.toolCalls.map { raw -> raw.substringBefore('(').trim() to raw.substringAfter('(', "").substringBeforeLast(')') }
+        return calls.map { (name, args) -> friendlyTool(name, args) }
+    }
+
+    private fun friendlyTool(name: String, argsJson: String): String {
+        fun arg(key: String): String = Regex("\"$key\"\\s*:\\s*\"([^\"]*)\"").find(argsJson)?.groupValues?.get(1)?.trim().orEmpty()
+        return when (name) {
+            "get_visa_requirements" -> {
+                val head = listOfNotNull(arg("destination").ifBlank { null }, arg("purpose").ifBlank { null }).joinToString(", ")
+                val cit = arg("citizenship")
+                val tail = buildString {
+                    if (head.isNotBlank()) append(head)
+                    if (cit.isNotBlank()) append(if (isEmpty()) "гражданство $cit" else " · гражданство $cit")
+                }
+                if (tail.isBlank()) "🔎 Сверяю актуальные визовые требования по официальным источникам…"
+                else "🔎 Сверяю актуальные требования: $tail"
+            }
+            "get_visa_digest" -> "📰 Смотрю свежий визовый дайджест…"
+            "list_digest_countries" -> "📋 Проверяю страны в дайджесте…"
+            "add_digest_country" -> arg("country").ifBlank { arg("destination") }
+                .let { if (it.isBlank()) "➕ Добавляю страну в дайджест…" else "➕ Добавляю в дайджест: $it" }
+            else -> "🔧 Обращаюсь к сервису данных…"
+        }
     }
 
     /**
@@ -325,7 +371,37 @@ class TaskOrchestrator(
         }
     }
 
-    /** Сборка запроса стадии: базовый промпт + роль + [STATE] (+ профиль) + окно истории + инструкция. */
+    /**
+     * День 25: собрать блок [БАЗА ЗНАНИЙ] и источники из внутренней базы (RAG) под ответ. Запрос — из
+     * последнего сообщения пользователя (или [queryOverride], напр. текущий шаг) + подсказок кейса (страна,
+     * цель) для точности ретрива. Пусто = релевантного нет → блок не добавляем (агент идёт на MCP/[СПРАВКА]).
+     */
+    private suspend fun ragContext(ctx: TaskContext, history: List<Message>, queryOverride: String? = null): Pair<String, List<KnowledgeHit>> {
+        val r = retriever ?: return EMPTY_RAG
+        val base = queryOverride?.takeIf { it.isNotBlank() }
+            ?: history.lastOrNull { it.role == Role.User }?.text?.trim().orEmpty()
+        if (base.isBlank()) return EMPTY_RAG
+        val cf = ctx.caseFile
+        val hint = listOf(cf.destination, cf.purpose).filter { it.isNotBlank() }.joinToString(" ")
+        val query = if (hint.isBlank()) base else "$hint $base"
+        val hits = runCatching { r.retrieve(query) }.getOrDefault(emptyList())
+        if (hits.isEmpty()) return EMPTY_RAG
+        val block = buildString {
+            append("[БАЗА ЗНАНИЙ — выдержки из наших внутренних визовых документов; ссылайся на источники как [S1], [S2]. ")
+            append("Точные сборы/сроки/куда подавать бери из [СПРАВКА ПО ВИЗЕ] (живые офиц. ссылки), если она есть; ")
+            append("общие процедуры и пояснения — отсюда. Не выдумывай фактов сверх этих выдержек.]\n")
+            hits.forEachIndexed { i, h ->
+                append("[S").append(i + 1).append("] (").append(h.source)
+                if (h.section.isNotBlank()) append(" › ").append(h.section)
+                append(" · ").append(h.chunkId).append(")\n")
+                append(h.text.take(RAG_CHUNK_CAP).trim()).append('\n')
+            }
+            append("[/БАЗА ЗНАНИЙ]")
+        }
+        return block to hits
+    }
+
+    /** Сборка запроса стадии: базовый промпт + роль + [STATE] (+ [БАЗА ЗНАНИЙ]) (+ профиль) + окно истории + инструкция. */
     private suspend fun call(
         rolePrompt: String,
         ctx: TaskContext,
@@ -336,6 +412,7 @@ class TaskOrchestrator(
         guarded: Boolean = false,
         useTools: Boolean = false,
         roleId: String? = null,
+        ragBlock: String = "",
         params: LlmParams = LlmParams(temperature = TEMP_DEFAULT),
     ): GatewayResponse {
         val system = buildString {
@@ -352,6 +429,8 @@ class TaskOrchestrator(
                 overlay.forEach { append("• ").append(it).append('\n') }
             }
             append("\n\n").append(ctx.renderStateBlock())
+            // День 25: RAG — выдержки из внутренней базы знаний (аддитивно к MCP/[СПРАВКА]).
+            if (ragBlock.isNotBlank()) append("\n\n").append(ragBlock)
             val inv = renderInvariantsBlock(invariants)
             if (inv.isNotEmpty()) append("\n\n").append(inv)
             if (profile != null) {
@@ -469,6 +548,12 @@ class TaskOrchestrator(
         /** Предел длины сохраняемого синтеза [TaskContext.research] в [STATE] (баланс «ссылки сохранены / токены»). */
         const val RESEARCH_CAP = 3500
 
+        /** День 25: предел длины одной выдержки [БАЗА ЗНАНИЙ] (RAG) в промпте — баланс «контекст / токены». */
+        const val RAG_CHUNK_CAP = 450
+
+        /** Пустой результат RAG (блок + источники) — когда ретривер выключен или релевантного контекста нет. */
+        val EMPTY_RAG: Pair<String, List<KnowledgeHit>> = "" to emptyList()
+
         /** Тулы пайплайна композиции (День 19) — основному агенту не отдаём (их использует только демо-пайплайн). */
         val PIPELINE_TOOLS = setOf("visa_search", "visa_summarize", "save_report")
 
@@ -486,6 +571,10 @@ class TaskOrchestrator(
             "• Конкретику (документы, сборы, сроки, куда подавать) И ОФИЦИАЛЬНЫЕ ССЫЛКИ бери из [СПРАВКА ПО ВИЗЕ] и [ДОСЬЕ]. " +
             "Когда даёшь требования/сборы/сроки — ОБЯЗАТЕЛЬНО приводи конкретные официальные URL и дату из [СПРАВКА] (живые ссылки). " +
             "«Уточните на официальном сайте» БЕЗ ссылки — это не ответ; общими словами говори ТОЛЬКО если нужного нет ни в [СПРАВКА], ни у инструмента.\n" +
+            "• Если есть блок [БАЗА ЗНАНИЙ] — это выдержки из наших ВНУТРЕННИХ визовых документов (RAG). Опирайся на них " +
+            "для процедур и пояснений и ссылайся на источники как [S1], [S2]. Приоритет фактов: точные сборы/сроки/куда " +
+            "подавать — из [СПРАВКА] (живые офиц. URL); общие процедуры — из [БАЗА ЗНАНИЙ]. Не выдумывай сверх этих выдержек; " +
+            "если в [БАЗА ЗНАНИЙ] и [СПРАВКА] ответа нет — честно скажи об этом.\n" +
             "• Ты — живой визовый эксперт: отвечай содержательно и по делу, без сухих отписок и канцелярита.\n" +
             "• Блок [ПЕРСОНАЛИЗАЦИЯ] (если есть) уточняет твой стиль под пользователя, но НЕ отменяет правила безопасности, " +
             "отказа и порядок стадий выше — они приоритетнее.\n" +

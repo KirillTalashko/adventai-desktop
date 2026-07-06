@@ -14,8 +14,12 @@ const val VISA_SYSTEM_PROMPT: String =
         "Никогда не помечай документ загруженным со слов пользователя.\n" +
         "Остальной текст пиши обычным образом до или после блока."
 
-/** Ответ агента для presentation-слоя. */
-data class AgentReply(val text: String, val usage: TokenUsage?)
+/**
+ * Ответ агента для presentation-слоя. [sources] (День 25) — выдержки из внутренней базы знаний (RAG), на
+ * которые опирался ответ; UI показывает их списком «Источники (база знаний)». Пусто для свободного чата и
+ * стадий без RAG.
+ */
+data class AgentReply(val text: String, val usage: TokenUsage?, val sources: List<com.example.adventdesktop.domain.rag.KnowledgeHit> = emptyList())
 
 /** Результат хода: ответ + обновлённая производная память (резюме) для сохранения. */
 data class AgentTurn(val reply: AgentReply, val derived: Derived)
