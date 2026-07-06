@@ -112,6 +112,8 @@ internal data class AppConfigDto(
     val skillPromptTuneEnabled: Boolean = false,
     // День 20: подключить СТОРОННЕЕ MCP (npx @modelcontextprotocol/server-everything) через маршрутизатор.
     val extraMcpEnabled: Boolean = false,
+    // День 25: RAG в агенте — подмешивать выдержки из внутренней базы знаний + источники на отвечающих стадиях.
+    val ragInAgentEnabled: Boolean = true,
     // Режим разработчика: показывать инженерные витрины (MCP/коннекторы/демо-пайплайн).
     val developerMode: Boolean = false,
     // Оформление (аудит Рамса #9): тёмная тема и reduced-motion.

@@ -23,8 +23,10 @@ import com.example.adventdesktop.data.KnowledgeIndex
 import com.example.adventdesktop.data.OllamaEmbedder
 import com.example.adventdesktop.data.HashingEmbedder
 import com.example.adventdesktop.domain.rag.Embedder
+import com.example.adventdesktop.data.RagKnowledgeRetriever
 import com.example.adventdesktop.domain.rag.CitationCheck
 import com.example.adventdesktop.domain.rag.GoldAnswer
+import com.example.adventdesktop.domain.rag.KnowledgeHit
 import com.example.adventdesktop.domain.rag.GoldRetrieval
 import com.example.adventdesktop.domain.rag.IndexStats
 import com.example.adventdesktop.domain.rag.RagAnswer
@@ -938,6 +940,7 @@ class ChatState(
     // --- День 20: коннекторы агента (переключатели MCP / Skill) + демо-прогон и сравнение токенов ---
 
     val mcpEnabled: Boolean get() = config.mcpEnabled
+    val ragInAgentEnabled: Boolean get() = config.ragInAgentEnabled
     val skillDocsEnabled: Boolean get() = config.skillDocsEnabled
     val skillPromptTuneEnabled: Boolean get() = config.skillPromptTuneEnabled
     val extraMcpEnabled: Boolean get() = config.extraMcpEnabled
@@ -977,6 +980,13 @@ class ChatState(
     /** Переключатель СТОРОННЕГО MCP (server-everything): пересобираем агента — gateway станет маршрутизатором. */
     fun setExtraMcpEnabled(value: Boolean) {
         config = config.copy(extraMcpEnabled = value)
+        configStore.save(config)
+        rebuildAgent()
+    }
+
+    /** День 25: переключатель RAG в агенте — пересобираем оркестратор с/без ретривера по внутренней базе. */
+    fun setRagInAgentEnabled(value: Boolean) {
+        config = config.copy(ragInAgentEnabled = value)
         configStore.save(config)
         rebuildAgent()
     }
@@ -1223,6 +1233,22 @@ class ChatState(
      * нужно жать «предложить план» и «следующий шаг» — агент идёт сам. Лимит [MAX_AUTO_CHAIN] защищает
      * от зацикливания.
      */
+    /**
+     * День 25: понятный пользователю список источников из внутренней базы (RAG) под ответом агента. Показываем
+     * человекочитаемые «крошки» раздела (в них уже есть название документа), а технический chunk_id/имя файла
+     * не выносим — это деталь для dev-панели, а не для клиента.
+     */
+    private fun renderRagSources(sources: List<KnowledgeHit>): String {
+        if (sources.isEmpty()) return ""
+        return "\n\n📚 Источники (наша база знаний):\n" + sources.mapIndexed { i, s ->
+            "[S${i + 1}] " + s.section.ifBlank { docTitleFromFile(s.source) }
+        }.joinToString("\n")
+    }
+
+    /** Имя файла базы → человекочитаемый заголовок (fallback, если у чанка нет «крошек» раздела). */
+    private fun docTitleFromFile(file: String): String =
+        file.substringBeforeLast('.').replace('-', ' ').replaceFirstChar { it.uppercase() }
+
     private fun runStage(firstAction: suspend (TaskOrchestrator, TaskContext, List<Message>, UserProfile?) -> Result<TaskStep>) {
         val conv0 = current ?: return
         val repo = conversations ?: return
@@ -1246,7 +1272,9 @@ class ChatState(
                 val taskStep = result.getOrThrow()
                 var updated = conv
                 if (taskStep.reply.text.isNotBlank()) {
-                    updated = updated.withMessage(Message(Role.Assistant, taskStep.reply.text, usage = taskStep.reply.usage))
+                    // День 25: всегда показываем источники из внутренней базы (RAG) под ответом агента.
+                    val text = taskStep.reply.text + renderRagSources(taskStep.reply.sources)
+                    updated = updated.withMessage(Message(Role.Assistant, text, usage = taskStep.reply.usage))
                 }
                 // cancel — простой вопрос: ответ дан, режим задачи снимаем (свободный чат).
                 updated = updated.copy(task = if (taskStep.cancel) null else taskStep.context)
@@ -1391,7 +1419,9 @@ class ChatState(
         val llm = resolveLlmConfig(model, config)
         client = llm?.let { LlmClient(it) }
         agent = client?.let { VisaAgent(it, guard) }
-        orchestrator = client?.let { TaskOrchestrator(it, guard, tools = agentTools, toolGuard = ToolCallGuard(), serviceGateway = extractorClient).apply { invariants = this@ChatState.invariants } }
+        // День 25: RAG в агенте — ретривер по внутренней базе знаний (детерминированно, без LLM). Тумблер в настройках.
+        val retriever = if (config.ragInAgentEnabled) RagKnowledgeRetriever(knowledge(), ::newEmbedder) else null
+        orchestrator = client?.let { TaskOrchestrator(it, guard, tools = agentTools, toolGuard = ToolCallGuard(), serviceGateway = extractorClient, retriever = retriever).apply { invariants = this@ChatState.invariants } }
         interviewAgent = client?.let { MockInterviewAgent(it) }
         // День 20: навык (Skill + CLI). CLI читает активный аккаунт сам (accounts.json), поэтому id не пробрасываем.
         val runner = CliSkillRunner(accountId = null)
