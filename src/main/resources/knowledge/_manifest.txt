@@ -1,11 +1,56 @@
-# Корпус визовой базы знаний (RAG, День 21). По одному имени файла на строку.
+# Корпус визовой базы знаний (RAG, Дни 21/24). По одному имени файла на строку.
 # PDF (japan.pdf) не в списке — он генерируется при сидинге (SamplePdf), демонстрируя ветку pdf→текст.
+# День 24: корпус расширен до ~50 документов — страны и сквозные темы (актуальность сверялась на 05.07.2026).
+
+# --- Европа: шенген и общие правила ---
 schengen.md
-usa.md
+france.md
+germany.md
+italy.md
+spain.md
+greece.md
+# --- Европа: вне Шенгена / ЕС ---
 uk.md
-uae.md
-china.md
+ireland.md
+cyprus.md
+serbia.md
+montenegro.md
+# --- Америка ---
+usa.md
 canada.md
+mexico.md
+brazil.md
+cuba.md
+dominican-republic.md
+# --- Азия и Ближний Восток ---
+china.md
+japan.md
+south-korea.md
+thailand.md
+vietnam.md
+india.md
+indonesia-bali.md
+singapore.md
+malaysia.md
+sri-lanka.md
+turkey.md
+israel.md
+saudi-arabia.md
+qatar.md
+oman.md
+uae.md
+# --- Океания ---
+australia.md
+new-zealand.md
+# --- Африка ---
+egypt.md
+morocco.md
+tanzania-zanzibar.md
+# --- Сквозные системы и темы ---
+eu-etias-ees.md
+uk-eta.md
+transit-visa.md
+digital-nomad-residency.md
 work-visa.md
 student-visa.md
 general-process.md
