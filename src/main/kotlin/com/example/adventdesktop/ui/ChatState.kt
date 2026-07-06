@@ -23,6 +23,7 @@ import com.example.adventdesktop.data.KnowledgeIndex
 import com.example.adventdesktop.data.OllamaEmbedder
 import com.example.adventdesktop.data.HashingEmbedder
 import com.example.adventdesktop.domain.rag.Embedder
+import com.example.adventdesktop.domain.rag.CitationCheck
 import com.example.adventdesktop.domain.rag.GoldAnswer
 import com.example.adventdesktop.domain.rag.GoldRetrieval
 import com.example.adventdesktop.domain.rag.IndexStats
@@ -903,6 +904,34 @@ class ChatState(
                 .onFailure { ragNote = "Ошибка сравнения поиска: ${it.message}"; goldRetrievalProgress = "" }
             (emb as? OllamaEmbedder)?.close()
             goldRetrievalRunning = false
+        }
+    }
+
+    // --- День 24: проверка цитат/источников/faithfulness по набору (нужен LLM: генерация + судья) ---
+    var citationEvalRunning by mutableStateOf(false)
+        private set
+    var citationEvalProgress by mutableStateOf("")
+        private set
+    var citationChecks by mutableStateOf<List<CitationCheck>>(emptyList())
+        private set
+
+    /** Прогнать 10 вопросов и проверить: есть источники / есть цитаты / смысл ответа совпал с цитатами. */
+    fun runCitationEval() {
+        val gw = client
+        if (citationEvalRunning) return
+        if (gw == null) { ragNote = "Нет ключа LLM — задайте его в «Настройках»."; return }
+        citationEvalRunning = true
+        ragNote = null
+        citationChecks = emptyList()
+        citationEvalProgress = "Подготовка…"
+        scope.launch {
+            val emb = newEmbedder()
+            runCatching {
+                knowledge().citationEval(gw, emb, ragOptions()) { i, n -> citationEvalProgress = "вопрос $i/$n" }
+            }.onSuccess { citationChecks = it; citationEvalProgress = "" }
+                .onFailure { ragNote = "Ошибка проверки цитат: ${it.message}"; citationEvalProgress = "" }
+            (emb as? OllamaEmbedder)?.close()
+            citationEvalRunning = false
         }
     }
 

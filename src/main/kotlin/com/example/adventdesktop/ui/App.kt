@@ -92,6 +92,7 @@ import com.example.adventdesktop.domain.Awaiting
 import com.example.adventdesktop.domain.Message
 import com.example.adventdesktop.domain.Role
 import com.example.adventdesktop.domain.TokenUsage
+import com.example.adventdesktop.domain.rag.CitationCheck
 import com.example.adventdesktop.domain.rag.GoldAnswer
 import com.example.adventdesktop.domain.rag.GoldRetrieval
 import com.example.adventdesktop.domain.rag.RagAnswer
@@ -646,6 +647,29 @@ private fun RagDialog(state: ChatState) {
                     }
                 }
                 if (state.goldAnswers.isNotEmpty()) GoldAnswersView(state.goldAnswers)
+
+                // === День 24 — обязательные цитаты/источники + режим «не знаю» ===
+                HorizontalDivider()
+                Text("День 24 · Цитаты, источники и «не знаю»", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = AppColors.accent)
+                Text(
+                    "Каждый ответ С RAG обязан нести источники (файл › раздел · chunk_id) и дословные цитаты из базы. " +
+                        "Если релевантность ниже порога — ассистент отвечает «не знаю» и просит уточнить (не выдумывает). " +
+                        "Прогон проверяет по 10 вопросам: есть ли источники, есть ли цитаты и совпадает ли смысл ответа " +
+                        "с цитатами (отдельная модель-судья, метрика Faithfulness).",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = { state.runCitationEval() },
+                        enabled = state.ragComparison != null && !state.citationEvalRunning,
+                        colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)
+                    ) { Text("Проверить цитаты и источники (10 вопросов)") }
+                    if (state.citationEvalRunning) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                        Text(state.citationEvalProgress, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                if (state.citationChecks.isNotEmpty()) CitationEvalView(state.citationChecks)
             }
         }
     )
@@ -781,22 +805,29 @@ private fun GoldRetrievalRow(r: GoldRetrieval) {
     }
 }
 
-/** Карточка ответа одного режима: ярлык (режим + «что это»), техстрока, текст, использованные источники. */
+/** Карточка ответа одного режима: ярлык, техстрока, текст, обязательные источники (+chunk_id) и цитаты (День 24). */
 @Composable
 private fun RagAnswerCard(a: RagAnswer, warn: Boolean, whatIs: String, note: String? = null) {
     val accent = if (warn) MaterialTheme.colorScheme.error else AppColors.accent
     Surface(color = accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("${a.mode} — $whatIs", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = accent)
+            if (a.abstained) Text("🚫 режим «не знаю» — контекст слабее порога, ответ не выдумывается", fontWeight = FontWeight.Medium, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
             note?.let { Text(it, fontWeight = FontWeight.Medium, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error) }
             val toks = a.usage?.let { "${it.total} ток." } ?: "—"
             val ctx = if (a.contextChars > 0) "контекст ${a.contextChars} симв." else "без контекста базы"
             Text("$toks · $ctx", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             ExpandableText(a.text, collapsedLines = 6)
             if (a.sources.isNotEmpty()) {
-                Text("Источники:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Источники (файл › раздел · chunk_id):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 a.sources.forEach { s ->
-                    Text("[${s.n}] %.3f · %s › %s".format(s.score, s.source, s.section), style = MaterialTheme.typography.labelSmall, color = accent)
+                    Text("[${s.n}] %.3f · %s › %s · %s".format(s.score, s.source, s.section, s.chunkId), style = MaterialTheme.typography.labelSmall, color = accent)
+                }
+            }
+            if (a.citations.isNotEmpty()) {
+                Text("Цитаты (дословно из источников):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                a.citations.forEach { c ->
+                    Text("[${c.n}] «${c.quote}»", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
                 }
             }
         }
@@ -820,8 +851,68 @@ private fun RagEvidence(sources: List<RagSource>, refused: Boolean) {
         sources.forEach { s ->
             Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("[${s.n}] %s › %s · %.3f".format(s.source, s.section, s.score), style = MaterialTheme.typography.labelSmall, color = AppColors.accent)
+                    Text("[${s.n}] %s › %s · %s · %.3f".format(s.source, s.section, s.chunkId, s.score), style = MaterialTheme.typography.labelSmall, color = AppColors.accent)
                     ExpandableText(s.text, collapsedLines = 3)
+                }
+            }
+        }
+    }
+}
+
+/** День 24: сводка «источники / цитаты / смысл совпал» по набору + разбор по каждому вопросу (и ловушка → «не знаю»). */
+@Composable
+private fun CitationEvalView(items: List<CitationCheck>) {
+    val pos = items.filter { !it.q.isNegative }
+    val withSources = pos.count { it.sourcesPresent }
+    val withQuotes = pos.count { it.quotesPresent }
+    val faithful = pos.count { it.faithful == true }
+    val neg = items.firstOrNull { it.q.isNegative }
+    Surface(color = AppColors.accent.copy(alpha = 0.06f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text("Итог (по ${pos.size} содержательным вопросам)", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
+            Text("• источники есть: $withSources из ${pos.size}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+            Text("• цитаты есть: $withQuotes из ${pos.size}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+            Text("• смысл ответа опирается на источники (Faithfulness): $faithful из ${pos.size}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+            neg?.let {
+                Text(
+                    "• вопрос-ловушка (в базе нет ответа): " + if (it.abstained) "ответил «не знаю» ✓" else "НЕ воздержался ✗",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (it.abstained) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error
+                )
+            }
+            HorizontalDivider()
+            items.forEach { c -> CitationEvalRow(c) }
+        }
+    }
+}
+
+/** Одна строка проверки Дня 24: вопрос + вердикт + сам ответ, источники (chunk_id) и цитаты (для наглядности). */
+@Composable
+private fun CitationEvalRow(c: CitationCheck) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text("#${c.q.id}. ${c.q.question}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
+            val line = if (c.expectedAbstain) {
+                "ловушка → " + if (c.abstained) "«не знаю» ✓" else "ответил ✗ (должен был воздержаться)"
+            } else {
+                "источники ${hitMark(c.sourcesPresent)} · цитаты ${hitMark(c.quotesPresent)} · смысл ${hitMark(c.faithful)}" +
+                    if (c.abstained) " · «не знаю» (контекст слабый)" else ""
+            }
+            Text(line, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Medium, color = if (c.pass) AppColors.accent else MaterialTheme.colorScheme.error)
+
+            Text("Ответ:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            ExpandableText(c.answer.text, collapsedLines = 3)
+
+            if (c.answer.sources.isNotEmpty()) {
+                Text("Источники (файл › раздел · chunk_id):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                c.answer.sources.forEach { s ->
+                    Text("[${s.n}] %.3f · %s › %s · %s".format(s.score, s.source, s.section, s.chunkId), style = MaterialTheme.typography.labelSmall, color = AppColors.accent)
+                }
+            }
+            if (c.answer.citations.isNotEmpty()) {
+                Text("Цитаты (дословно):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                c.answer.citations.forEach { q ->
+                    Text("[${q.n}] «${q.quote}»", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
                 }
             }
         }

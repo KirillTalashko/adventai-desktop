@@ -1,6 +1,7 @@
 package com.example.adventdesktop.data
 
 import com.example.adventdesktop.domain.LlmGateway
+import com.example.adventdesktop.domain.rag.CitationCheck
 import com.example.adventdesktop.domain.rag.ContextualChunker
 import com.example.adventdesktop.domain.rag.DocumentIndexer
 import com.example.adventdesktop.domain.rag.Embedder
@@ -15,6 +16,7 @@ import com.example.adventdesktop.domain.rag.QueryRewriter
 import com.example.adventdesktop.domain.rag.RagAnswer
 import com.example.adventdesktop.domain.rag.RagAnswerer
 import com.example.adventdesktop.domain.rag.RagDocument
+import com.example.adventdesktop.domain.rag.RagFaithfulnessJudge
 import com.example.adventdesktop.domain.rag.RagOptions
 import com.example.adventdesktop.domain.rag.RagSearch
 import com.example.adventdesktop.domain.rag.RelevanceFilter
@@ -114,13 +116,41 @@ class KnowledgeIndex(ragDir: File) {
     suspend fun answer(gateway: LlmGateway, embedder: Embedder, question: String, useRag: Boolean, options: RagOptions = RagOptions()): RagAnswer {
         val answerer = RagAnswerer(gateway)
         if (!useRag) return answerer.plain(question)
-        return answerer.withContext(question, retrieve(gateway, embedder, options, question).after)
+        val after = retrieve(gateway, embedder, options, question).after
+        // День 24: релевантность ниже порога (фильтр оставил пусто) → режим «не знаю», без обращения к LLM.
+        return if (after.isEmpty()) answerer.abstain(question) else answerer.withContext(question, after)
     }
 
-    /** Ответ С RAG вместе с трейсом поиска (для показа top-K до/после в панели). */
+    /** Ответ С RAG вместе с трейсом поиска (для показа top-K до/после в панели). Пусто после фильтра → «не знаю». */
     suspend fun answerWithTrace(gateway: LlmGateway, embedder: Embedder, question: String, options: RagOptions): Pair<RagAnswer, RetrievalTrace> {
         val trace = retrieve(gateway, embedder, options, question)
-        return RagAnswerer(gateway).withContext(question, trace.after) to trace
+        val answerer = RagAnswerer(gateway)
+        val ans = if (trace.after.isEmpty()) answerer.abstain(question) else answerer.withContext(question, trace.after)
+        return ans to trace
+    }
+
+    /**
+     * Проверка Дня 24 по набору: для каждого вопроса — ответ С RAG, затем критерии «есть источники / есть
+     * цитаты / смысл ответа совпадает с цитатами» ([RagFaithfulnessJudge]). На негативном вопросе правильно —
+     * режим «не знаю». Нужен живой LLM (генерация ответа + судья).
+     */
+    suspend fun citationEval(
+        gateway: LlmGateway,
+        embedder: Embedder,
+        options: RagOptions,
+        onProgress: (Int, Int) -> Unit = { _, _ -> },
+    ): List<CitationCheck> {
+        val judge = RagFaithfulnessJudge(gateway)
+        val qs = goldQuestions()
+        return qs.mapIndexed { i, q ->
+            onProgress(i + 1, qs.size)
+            val ans = runCatching { answer(gateway, embedder, q.question, useRag = true, options) }
+                .getOrElse { RagAnswer("С RAG", "(ошибка: ${it.message})", emptyList(), null, 0) }
+            // Faithfulness сверяем против ИСТОЧНИКОВ ответа (полные чанки), а не одной цитаты — иначе занижаем.
+            val faithful = if (ans.abstained || ans.sources.isEmpty()) null
+            else runCatching { judge.faithful(ans.text, ans.sources.map { it.text }) }.getOrNull()
+            CitationCheck(q, ans, faithful)
+        }
     }
 
     fun goldQuestions(): List<GoldQuestion> = GoldQuestions.load()
