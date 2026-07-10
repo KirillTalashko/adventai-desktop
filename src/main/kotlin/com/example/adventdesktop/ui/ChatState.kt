@@ -11,6 +11,9 @@ import com.example.adventdesktop.data.DocStore
 import com.example.adventdesktop.data.HttpProxy
 import com.example.adventdesktop.data.InvariantStore
 import com.example.adventdesktop.data.LlmClient
+import com.example.adventdesktop.data.LocalLlmClient
+import com.example.adventdesktop.data.LOCAL_LLM_SAMPLES
+import com.example.adventdesktop.data.LlmSample
 import com.example.adventdesktop.data.ModelOption
 import com.example.adventdesktop.data.Models
 import com.example.adventdesktop.data.ProfileStore
@@ -802,6 +805,75 @@ class ChatState(
     private fun IndexStats.toView() = RagStrategyView(
         strategy, chunkCount, avgChars, minChars, maxChars, avgTokens, sectionCount, buildMs, embedderId,
     )
+
+    // --- Неделя 6, День 26: локальная LLM (Ollama) — dev-панель «Локальная LLM» ---
+
+    /** Результат одного запроса к локальной LLM (для панели): метка, промпт, ответ/ошибка, задержка, токены. */
+    data class LocalLlmResult(
+        val level: String,
+        val prompt: String,
+        val answer: String,
+        val ms: Long,
+        val promptTokens: Int,
+        val completionTokens: Int,
+        val totalTokens: Int,
+        val error: Boolean = false,
+    )
+
+    var localLlmOpen by mutableStateOf(false)
+        private set
+    var localLlmModel by mutableStateOf(LocalLlmClient.DEFAULT_MODEL)
+    var localLlmPrompt by mutableStateOf("Кратко: что такое шенгенская виза?")
+    var localLlmRunning by mutableStateOf(false)
+        private set
+    var localLlmNote by mutableStateOf<String?>(null)
+        private set
+    var localLlmResults by mutableStateOf<List<LocalLlmResult>>(emptyList())
+        private set
+
+    fun openLocalLlm() { localLlmOpen = true }
+    fun closeLocalLlm() { localLlmOpen = false }
+
+    /** Один запрос к локальной LLM из поля ввода панели. */
+    fun localLlmAsk() {
+        val prompt = localLlmPrompt.trim()
+        if (prompt.isEmpty() || localLlmRunning) return
+        runLocalLlm(listOf(LlmSample("свой запрос", prompt)))
+    }
+
+    /** Прогнать 3 контрольных запроса разной сложности ([LOCAL_LLM_SAMPLES]). */
+    fun localLlmRunSamples() {
+        if (localLlmRunning) return
+        runLocalLlm(LOCAL_LLM_SAMPLES)
+    }
+
+    private fun runLocalLlm(samples: List<LlmSample>) {
+        localLlmRunning = true
+        localLlmNote = null
+        localLlmResults = emptyList()
+        val model = localLlmModel.trim().ifBlank { LocalLlmClient.DEFAULT_MODEL }
+        scope.launch {
+            val client = LocalLlmClient(model = model)
+            val acc = mutableListOf<LocalLlmResult>()
+            for (s in samples) {
+                val start = System.currentTimeMillis()
+                val r = runCatching { client.complete(listOf(Message(Role.User, s.prompt))) }
+                val ms = System.currentTimeMillis() - start
+                r.onSuccess { resp ->
+                    val u = resp.usage
+                    acc.add(LocalLlmResult(s.level, s.prompt, resp.text, ms, u?.prompt ?: 0, u?.completion ?: 0, u?.total ?: 0))
+                }.onFailure { e ->
+                    acc.add(LocalLlmResult(s.level, s.prompt, e.message ?: "ошибка", ms, 0, 0, 0, error = true))
+                }
+                localLlmResults = acc.toList()   // прогрессивно показываем по мере ответов
+            }
+            runCatching { client.close() }
+            if (acc.isNotEmpty() && acc.all { it.error }) {
+                localLlmNote = "Локальная модель недоступна. Запусти `ollama serve` и `ollama pull $model`."
+            }
+            localLlmRunning = false
+        }
+    }
 
     // --- День 22: RAG-ответ (два режима: с RAG / без) + контрольный набор из 10 вопросов ---
 

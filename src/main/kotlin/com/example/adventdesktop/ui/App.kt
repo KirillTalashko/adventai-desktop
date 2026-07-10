@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Settings
@@ -142,6 +143,7 @@ fun App(state: ChatState) {
         if (state.mcpDialogOpen) McpToolsDialog(state)
         if (state.connectorsOpen) ConnectorsDialog(state)
         if (state.ragOpen) RagDialog(state)
+        if (state.localLlmOpen) LocalLlmDialog(state)
     }
 }
 
@@ -421,6 +423,7 @@ private fun Composer(state: ChatState) {
                         McpButton(state)
                         ConnectorsButton(state)
                         RagButton(state)
+                        LocalLlmButton(state)
                     }
                     DropdownChip(state.model.title, Models.all, { it.title }) { state.chooseModel(it) }
                     Spacer(Modifier.weight(1f))
@@ -507,6 +510,96 @@ private fun RagButton(state: ChatState) {
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(Icons.Filled.Storage, "Индексация знаний (RAG)", Modifier.size(20.dp), tint = AppColors.accent)
+        }
+    }
+}
+
+/** Кнопка «Локальная LLM» (Неделя 6, День 26) — открыть панель запуска локальной модели (Ollama). */
+@Composable
+private fun LocalLlmButton(state: ChatState) {
+    Surface(
+        onClick = { state.openLocalLlm() },
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.size(34.dp)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(Icons.Filled.Memory, "Локальная LLM", Modifier.size(20.dp), tint = AppColors.accent)
+        }
+    }
+}
+
+/** Окно «Локальная LLM» (День 26): запрос к локальной модели (Ollama) + прогон 3 запросов разной сложности. */
+@Composable
+private fun LocalLlmDialog(state: ChatState) {
+    AlertDialog(
+        onDismissRequest = { state.closeLocalLlm() },
+        confirmButton = { TextButton(onClick = { state.closeLocalLlm() }) { Text("Закрыть") } },
+        title = { Text("Локальная LLM (Ollama)") },
+        text = {
+            Column(
+                modifier = Modifier.heightIn(max = 600.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    "Локальная LLM отвечает прямо на вашей машине через Ollama (localhost:11434) — бесплатно и приватно, " +
+                        "без облака. Нужны запущенная «ollama serve» и «ollama pull <модель>».",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface
+                )
+                state.localLlmNote?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = AppColors.accent)
+                }
+                OutlinedTextField(
+                    value = state.localLlmModel, onValueChange = { state.localLlmModel = it },
+                    label = { Text("Модель Ollama") }, singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = state.localLlmPrompt, onValueChange = { state.localLlmPrompt = it },
+                    label = { Text("Ваш запрос") }, maxLines = 4, modifier = Modifier.fillMaxWidth()
+                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = { state.localLlmRunSamples() },
+                        enabled = !state.localLlmRunning,
+                        colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)
+                    ) { Text("Прогнать 3 запроса") }
+                    TextButton(
+                        onClick = { state.localLlmAsk() },
+                        enabled = !state.localLlmRunning && state.localLlmPrompt.isNotBlank()
+                    ) { Text("Спросить своё") }
+                    if (state.localLlmRunning) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                }
+                state.localLlmResults.forEach { LocalLlmResultCard(it) }
+            }
+        }
+    )
+}
+
+/** Карточка одного ответа локальной LLM: сложность, промпт, ответ и метрики (задержка, токены). */
+@Composable
+private fun LocalLlmResultCard(r: ChatState.LocalLlmResult) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                "Сложность: ${r.level}",
+                style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = AppColors.accent
+            )
+            Text("❓ ${r.prompt}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                (if (r.error) "⚠️ " else "💬 ") + r.answer,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (r.error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+            )
+            if (!r.error) {
+                Text(
+                    "⏱ ${r.ms} мс · токены: вход ${r.promptTokens}, выход ${r.completionTokens}, всего ${r.totalTokens}",
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
