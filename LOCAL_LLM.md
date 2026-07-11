@@ -28,9 +28,13 @@ data/LocalLlmClient ── HTTP POST → http://localhost:11434/api/chat  (Ollam
 - **`data/LocalLlmClient.kt`** — Ktor-клиент к нативному Ollama `/api/chat`. Реализует `domain.LlmGateway`
   (`complete(messages, tools, params, executeTool)`), маппит `Message`(`Role.wire`)→ollama-сообщения,
   берёт `message.content`, токены — из `prompt_eval_count`/`eval_count`. Модель по умолчанию — `qwen2.5:7b`.
+  Запросы идут с системным промптом `LOCAL_LLM_SYSTEM`, **пинящим русский** (qwen2.5 — китайская модель и на
+  длинных ответах иногда съезжает на китайский), и `temperature=0.3` для стабильности.
 - **`cli/LocalLlmMain.kt`** + задача `runLocalLlm` в `build.gradle.kts` (по образцу `runMcpDemo`).
 - **UI:** `ChatState.localLlmRunSamples()/localLlmAsk()` + панель `LocalLlmDialog` в `App.kt` (mirror RAG-панели,
-  gated `developerMode`). Прогресс показывается по мере ответов.
+  gated `developerMode`). Прогресс показывается по мере ответов. **Выбор модели** — выпадашка из установленных в
+  Ollama (`fetchOllamaModels` → `GET /api/tags`, эмбеддеры отфильтрованы); можно переключаться на лету.
+- **«Думающие» модели** (Qwen3 и т.п.): блок `<think>…</think>` вырезается из ответа (`THINK_REGEX`).
 - **3 запроса** — общий список `LOCAL_LLM_SAMPLES` (в `LocalLlmClient.kt`), один и тот же для CLI и панели (DRY).
 
 ### Почему отдельный клиент, а не `LlmClient` с другим baseUrl
@@ -63,6 +67,15 @@ ollama pull qwen2.5:7b
 ```
 
 Без запущенной Ollama или без скачанной модели клиент отдаёт внятную ошибку с подсказкой `ollama pull …`.
+
+**Выбор модели.** В панели — выпадашка со всеми установленными моделями (переключение на лету); в CLI —
+`-Dmodel=<name>`. Компромисс скорость/качество на CPU:
+
+| Модель | Скорость (CPU) | Русский |
+|---|---|---|
+| `qwen2.5:7b` (дефолт) | быстро (~5–50 c/ответ) | хорошо, но на длинных ответах иногда съезжает на китайский |
+| `qwen3` крупная (напр. 24 ГБ) | очень медленно (~8 мин/ответ) | отлично, без дрейфа |
+| `qwen3:4b`/`qwen3:8b` (совет) | средне | хорошо — золотая середина для демо |
 
 ## Проверка
 

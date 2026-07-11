@@ -9,8 +9,9 @@ Clean Architecture в одном Gradle-модуле, три пакета + comp
 - **Model.kt** — `Role`, `Message`(role, text, createdAtMs, `usage: TokenUsage?`), `Derived`(summary/facts + счётчики),
   `Conversation`(id, title, createdAtMs, messages, derived), `ConversationMeta`, `MemoryMode`(Layered/Window/Facts/Summary/Full),
   `WorkingMemory`(goal, constraints), `LongTermMemory`(profile, decisions).
-- **Ports.kt** — интерфейсы: `LlmGateway.complete(messages): GatewayResponse`, `ConversationRepository`,
-  `MemoryStore`; плюс `TokenUsage`, `GatewayResponse`.
+- **Ports.kt** — интерфейсы: `LlmGateway.complete(messages, tools, params, executeTool): GatewayResponse`
+  (tool-loop + `LlmParams`), `ConversationRepository`, `MemoryStore`, `ToolGateway`, `SkillRunner`; плюс
+  `TokenUsage`, `GatewayResponse`.
 - **Memory.kt** — `ContextAssembler` (suspend): по `MemoryMode` собирает сообщения для запроса. Чистые режимы
   (Full/Window/Layered) не ходят в сеть; Summary/Facts при росте «старого хвоста» дозапрашивают модель и
   обновляют `Derived`. Возвращает `Assembled(messages, derived, dropped)`.
@@ -20,6 +21,9 @@ Clean Architecture в одном Gradle-модуле, три пакета + comp
 ### `data/` — реализация портов под JVM
 - **LlmClient.kt** — `LlmGateway` на Ktor + движок **CIO**. На не-2xx бросает понятную ошибку (текст из
   `{"error":{"message":…}}`), на пустой `content` — тоже (чтобы не было «(пустой ответ)»). `LlmConfig(baseUrl, apiKey, model)`.
+- **LocalLlmClient.kt** — вторая реализация `LlmGateway`: локальная генеративная LLM через **Ollama**
+  (`POST http://localhost:11434/api/chat`, `stream=false`, **без прокси** — как `OllamaEmbedder`), дефолт
+  `qwen2.5:7b`. Системный промпт пинит русский, `temperature=0.3`, вырезает `<think>…</think>`. День 26.
 - **Models.kt** — `ModelOption`(id, title, provider, цены), список `Models.all` (DeepSeek + бесплатные OpenRouter),
   `resolveLlmConfig(model, config)` (baseUrl по провайдеру, ключ по провайдеру; null если ключа нет).
 - **ConfigStore.kt** — `DesktopConfig`(openrouterKey, deepseekKey, modelId, memoryMode) + load/save в `config.json`;
@@ -52,7 +56,7 @@ Composer (ui) → ChatState.send()
    → добавляет user-сообщение, сохраняет диалог, refreshList
    → VisaAgent.ask(mode, conversation, working, longTerm)        // domain
         → ContextAssembler.assemble(mode, …)                     // при Summary/Facts может вызвать LLM
-        → LlmGateway.complete(messages)                          // LlmClient (Ktor CIO) → DeepSeek/OpenRouter
+        → LlmGateway.complete(messages)                          // LlmClient (Ktor CIO) → DeepSeek/OpenRouter; либо LocalLlmClient → Ollama (localhost)
    → AgentTurn(reply.text + usage, derived)
    → ChatState добавляет assistant-сообщение (с usage), сохраняет derived → UI обновляется
 ```
