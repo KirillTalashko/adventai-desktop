@@ -62,6 +62,18 @@ tasks.register<JavaExec>("runMcpDemo") {
     jvmArgs("-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8")
 }
 
+// Неделя 6, День 26: консольная проверка локальной LLM (Ollama) — 3 запроса разной сложности.
+//   Запуск: .\gradlew.bat runLocalLlm   (модель по умолчанию qwen2.5:7b; своя — -Pmodel=llama3.2:3b)
+tasks.register<JavaExec>("runLocalLlm") {
+    group = "application"
+    description = "День 26: обращение к локальной LLM через Ollama и вывод ответов на 3 запроса"
+    mainClass.set("com.example.adventdesktop.cli.LocalLlmMainKt")
+    classpath = sourceSets["main"].runtimeClasspath
+    jvmArgs("-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8")
+    // Своя модель: .\gradlew.bat runLocalLlm -Dmodel=llama3.2:3b (пробрасываем системное свойство в форк).
+    System.getProperty("model")?.let { systemProperty("model", it) }
+}
+
 // День 18: fat-jar MCP-сервера для деплоя на VPS (java -jar visa-mcp-server-all.jar).
 tasks.register<ShadowJar>("mcpServerJar") {
     group = "build"

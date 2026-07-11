@@ -194,9 +194,9 @@ implementation("org.slf4j:slf4j-nop:$slf4jVersion")   // SDK тянет slf4j
 2. **Имена веток:** описательные (`mcp-client`, `mcp-server`, `mcp-vps-deploy`…), **не** `taskNN`. ✅
 3. **Первый публичный MCP:** **fetch/web** на Дне 16; GitHub MCP — позже, для замеров токенов (День 20), если захочется нагляднее. ✅
 4. **Свой MCP-сервер:** **remote на своём VPS, транспорт HTTP-SSE** (+ stdio для локальной отладки). HTTPS через домен + Caddy, токен-авторизация. Инкрементально: **сначала ходит только наш агент**, публичный коннектор Claude.ai — позже (День 20, stretch). ✅
-5. **VPS:** у пользователя ещё нет (поднимаем впервые на Дне 19); провайдер/домен выбираем заранее. ⏳
-6. **`tool_calls`:** tool-loop пиним на `deepseek-chat` (поддерживает функции); фактическую поддержку проверяем в начале Дня 16. ⏳
+5. **VPS:** поднят на Дне 19; remote MCP-сервер задеплоен (HTTPS + токен-авторизация). ✅
+6. **`tool_calls`:** tool-loop пиним на `deepseek-chat` (поддерживает функции); поддержка проверена, tool-loop работает. ✅
 
 ---
 
-*Связанные доки:* [STATE_MACHINE.md](STATE_MACHINE.md) · [INVARIANTS.md](INVARIANTS.md) · [ARCHITECTURE.md](ARCHITECTURE.md) · [CONTEXT_WINDOW.md](CONTEXT_WINDOW.md) · [SESSION_HANDOFF.md](SESSION_HANDOFF.md). Будущие: `MCP.md`, `SKILLS.md`.
+*Связанные доки:* [STATE_MACHINE.md](STATE_MACHINE.md) · [INVARIANTS.md](INVARIANTS.md) · [ARCHITECTURE.md](ARCHITECTURE.md) · [CONTEXT_WINDOW.md](CONTEXT_WINDOW.md) · [SESSION_HANDOFF.md](SESSION_HANDOFF.md) · [MCP.md](MCP.md). Skill + CLI — `../SKILL_CLI_PATTERN.md` (в корне).

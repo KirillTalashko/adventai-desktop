@@ -14,7 +14,7 @@
 ## Стек
 
 Kotlin/JVM (target 21) · **Compose Multiplatform Desktop 1.7.3** · Ktor client (CIO) ·
-kotlinx-serialization · Okio нет (java.io) · jpackage (упаковка в `.exe`/`.msi`). LLM: DeepSeek / OpenRouter.
+kotlinx-serialization · Okio нет (java.io) · jpackage (упаковка в `.exe`/`.msi`). LLM: DeepSeek / OpenRouter (облако) + локальная **Ollama** (`qwen2.5:7b`, `localhost:11434`).
 
 ## Архитектура (Clean Architecture · DRY · KISS)
 
@@ -29,7 +29,7 @@ Main.kt   окно + composition root (ручной DI)
 ## Память и контекст
 
 Три слоя памяти (краткосрочная / рабочая / долговременная) + 5 стратегий контекста
-(3 слоя · окно · факты · резюме · полная). Подробности и где в коде — `.claude/MEMORY_AND_CONTEXT.md`.
+(3 слоя · окно · факты · резюме · полная). Подробности и где в коде — `.claude/MEMORY_MODEL.md` и `.claude/CONTEXT_WINDOW.md`.
 
 ## Данные на диске (`~/.adventai/`)
 

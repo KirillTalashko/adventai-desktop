@@ -22,19 +22,30 @@
   старого хвоста при заполнении окна ≥30%. Долговременная память — в Markdown. → **смержено в `main` (PR #1)**.
 - **День 12 — персонализация:** профиль предпочтений (`UserProfile`: длина/тон/формат/ограничения/язык),
   **онбординг**, **локальные аккаунты с изоляцией данных**, профиль инжектируется в каждый запрос блоком
-  `[ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ]`. → **реализовано и собрано, но ещё НЕ закоммичено** (нужен PR `day-12-personalization`).
+  `[ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ]`. → **закоммичено и влито в `main`**.
+- **Дни 13–15 — состояние задачи:** конечный автомат задачи (этап/шаг/ожидаемое действие), инварианты +
+  страж-валидатор, pause/resume. → влито в `main`.
+- **Неделя 4 (Дни 16–20) — MCP + Skills:** MCP-клиент (stdio-подпроцесс), свой remote MCP-сервер на VPS
+  (HTTPS + токен-авторизация, digest-планировщик), Skill + CLI как лёгкая альтернатива MCP, замеры токенов. → влито в `main`.
+- **Неделя 5 (Дни 21–25) — RAG:** индексация базы знаний (эмбеддер Ollama `nomic-embed-text`, чанкинг+overlap,
+  SQLite-индекс), векторный поиск, reranking, цитаты/источники/анти-галлюцинации, RAG в основном оркестраторе +
+  память задачи. База знаний ~50 документов. → влито в `main`.
+- **Неделя 6 (День 26) — Local LLM:** локальная генеративная LLM через **Ollama** (`data/LocalLlmClient`,
+  порт `LlmGateway`, `POST localhost:11434/api/chat`, дефолт `qwen2.5:7b`), CLI-задача `runLocalLlm`,
+  dev-панель «Локальная LLM». → ветка `local-llm-runner` (коммит `b2ea474`).
 
 ## Архитектура (Desktop, Clean Architecture · DRY · KISS)
 
 ```
 domain/  Model · Memory (ContextAssembler) · MemoryExtractor · UserProfile · Ports · VisaAgent  — без зависимостей
-data/    LlmClient (Ktor/CIO) · FileConversationRepository · FileMemoryStore · AccountStore · ProfileStore ·
-         ConfigStore · Models · Dto · Files
+data/    LlmClient (Ktor/CIO) · LocalLlmClient (Ollama localhost) · FileConversationRepository · FileMemoryStore ·
+         AccountStore · ProfileStore · ConfigStore · Models · Dto · Files · RAG (OllamaEmbedder · KnowledgeIndex ·
+         Reranker · RagKnowledgeRetriever) · MCP (McpClient · McpRouter)
 ui/      Theme · ChatState (state-holder) · App · Dialogs · Onboarding · ProfileForm   (Compose)
 Main.kt  окно + composition root (ручной DI)
 ```
 Границы: **UI знает только про `ChatState`; домен не знает про HTTP/файлы/Compose.**
-Стек: Kotlin/JVM 21 · Compose MP 1.7.3 · Ktor CIO · kotlinx-serialization · jpackage. LLM: DeepSeek / OpenRouter.
+Стек: Kotlin/JVM 21 · Compose MP 1.7.3 · Ktor CIO · kotlinx-serialization · jpackage. LLM: DeepSeek / OpenRouter + локальная Ollama (`qwen2.5:7b`, `localhost:11434`).
 
 ## Данные на диске (`~/.adventai/`)
 
@@ -87,10 +98,10 @@ accounts/<id>/
 
 ## Что дальше (TODO / роадмап)
 
-- **Оформить День 12 как PR** (`day-12-personalization` → `main`) — ещё не сделано.
+- **Неделя 6 (Local LLM), после Дня 26:** тумблер **cloud ↔ local** в нижнем селекторе моделей (+ провайдер
+  «ollama» в `Models.kt`), режим **сравнения** двух ответов (облако vs локаль) с маркировкой, MCP-tool-loop для
+  локальной модели, конфиг-поле `localModel`, стриминг токенов. Подробности — `.claude/WEEK_6_LOCAL_LLM.md`.
 - Branching (ветки диалога), промоушен sticky-facts рабочая→долговременная, аватар аккаунта.
-- Дни 13+: state-машина задачи + инварианты/валидация (конспект — в Android `.claude/WEEK_3_MEMORY_AND_STATE.md`,
-  роадмап — `.claude/STATE_MACHINE.md`).
 
 ## Справочные документы
 
