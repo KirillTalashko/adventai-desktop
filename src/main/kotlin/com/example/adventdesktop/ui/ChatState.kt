@@ -776,6 +776,12 @@ class ChatState(
         val s = k.stats("structural")
         val c = k.stats("contextual")
         ragComparison = if (f != null && s != null && c != null) RagComparisonView(ragDocCount, f.toView(), s.toView(), c.toView()) else null
+        // День 28 — установленные Ollama-модели для выбора локальной модели в сравнении (эмбеддеры отфильтрованы).
+        scope.launch {
+            val m = fetchOllamaModels()
+            localLlmModels = m
+            if (ragLocalModel !in m && m.isNotEmpty()) ragLocalModel = m.first()
+        }
     }
 
     fun closeRag() { ragOpen = false }
@@ -950,6 +956,61 @@ class ChatState(
             (emb as? OllamaEmbedder)?.close()
             ragAnswering = false
         }
+    }
+
+    // --- День 28: RAG локально vs облако (один локальный retrieval → генерация двумя моделями) ---
+
+    /** Результат генерации одной моделью поверх общего retrieval: метка, доступность, ответ, задержка, ошибка. */
+    data class RagVsResult(
+        val label: String,
+        val available: Boolean,
+        val answer: RagAnswer?,
+        val ms: Long,
+        val error: String?,
+    )
+
+    var ragVsRunning by mutableStateOf(false)
+        private set
+    var ragVsLocal by mutableStateOf<RagVsResult?>(null)
+        private set
+    var ragVsCloud by mutableStateOf<RagVsResult?>(null)
+        private set
+    /** Локальная модель Ollama для колонки «локаль» (список установленных подтягивается в [openRag]). */
+    var ragLocalModel by mutableStateOf(LocalLlmClient.DEFAULT_MODEL)
+
+    /**
+     * День 28 — один ЛОКАЛЬНЫЙ retrieval (эмбеддер) → ответ генерируют ЛОКАЛЬНАЯ (Ollama) и ОБЛАЧНАЯ модели
+     * поверх ОДНОГО набора чанков. Сравнение честное: контекст идентичен, отличается только генератор.
+     * Локальная колонка = RAG полностью без облака. Замеряем задержку и токены.
+     */
+    fun ragCompareLocalVsCloud() {
+        val q = ragQuery.trim()
+        if (q.isEmpty() || ragVsRunning) return
+        ragVsRunning = true; ragNote = null; ragVsLocal = null; ragVsCloud = null
+        scope.launch {
+            val emb = newEmbedder()
+            val localGw = LocalLlmClient(model = ragLocalModel)
+            val cloudGw = resolveLlmConfig(Models.byId("deepseek-chat"), config)?.let { LlmClient(it) }
+            runCatching {
+                val k = knowledge()
+                val after = k.retrieveLocal(emb, ragOptions(), q)   // локальный retrieval один раз, без облака
+                ragVsLocal = timeRagVs("Локальная · $ragLocalModel", true) { k.generate(localGw, after, q) }
+                ragVsCloud = if (cloudGw != null) timeRagVs("Облачная · deepseek-chat", true) { k.generate(cloudGw, after, q) }
+                    else RagVsResult("Облачная", false, null, 0, "Нет облачного ключа — RAG работает и без него, чисто локально.")
+            }.onFailure { ragNote = "Ошибка сравнения: ${it.message}" }
+            runCatching { localGw.close() }
+            runCatching { cloudGw?.close() }
+            (emb as? OllamaEmbedder)?.close()
+            ragVsRunning = false
+        }
+    }
+
+    private suspend fun timeRagVs(label: String, available: Boolean, block: suspend () -> RagAnswer): RagVsResult {
+        val start = System.currentTimeMillis()
+        return runCatching { block() }.fold(
+            onSuccess = { RagVsResult(label, available, it, System.currentTimeMillis() - start, null) },
+            onFailure = { RagVsResult(label, available, null, System.currentTimeMillis() - start, it.message) },
+        )
     }
 
     /** Подставить вопрос-ловушку (нет в базе) и сравнить — наглядно: без RAG выдумает, с RAG честно откажет. */

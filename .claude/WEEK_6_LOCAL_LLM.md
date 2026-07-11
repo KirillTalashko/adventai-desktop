@@ -251,8 +251,8 @@ curl http://localhost:11434                        # 4. API (тот же localho
 
 1. ✅ **Install Local LLM** — поставить локальную модель через Ollama (`ollama pull <model>`).
 2. ✅ **Work with Local LLM** — научить агента отвечать через локальную LLM (порт `LlmGateway` → Ollama chat).
-3. ⬜ **Compare Local LLM with Cloud LLM** — тумблер cloud↔local + **сравнение двух ответов**, прогнать локаль
-   через MCP/RAG/task-state, маркировать источник ответа.
+3. 🟡 **Compare Local LLM with Cloud LLM** — **реализовано для RAG-ответов** (День 28: локаль vs облако поверх
+   одного локального retrieval, с задержкой/токенами). Тумблер cloud↔local в основном чате — дальше.
 
 > Практический ориентир лектора (дословно по смыслу): «примените к локальной LLM все те же джедайские техники
 > (MCP, RAG, task-states); будет классно сделать тумблер, который переключает туда-сюда и сравнивает два ответа,
@@ -272,7 +272,11 @@ curl http://localhost:11434                        # 4. API (тот же localho
   `llama3.2:3b`) в нижнем **селекторе моделей** (провайдер `ollama`); `ChatState.rebuildAgent` ветвит главный
   шлюз на `LocalLlmClient` → весь агент отвечает локально, **без облака**. Общий data-интерфейс
   `LlmGatewayClient` (`LlmGateway` + `close()`), бейдж «⚡ локально · без облака», персист в `config.modelId`.
-  **Дальше (ДЗ ③):** режим сравнения cloud↔local с маркировкой, MCP-tool-loop для локальной модели.
+  Влито в `main` (PR #20, squash `a20c967`).
+- **День 28 (локальная LLM + RAG) — СДЕЛАНО** (ветка `local-llm-rag`): полностью локальный RAG (эмбеддер
+  `nomic-embed-text` + локальная генерация) + сравнение **локаль vs облако** поверх ОДНОГО retrieval.
+  `KnowledgeIndex.retrieveLocal`/`generate` (retrieval отделён от генерации); блок «День 28» в RAG-панели: две
+  колонки с ответами, задержкой и токенами, общие источники. ДЗ ③ (сравнение) закрыто для RAG.
 
 ---
 
