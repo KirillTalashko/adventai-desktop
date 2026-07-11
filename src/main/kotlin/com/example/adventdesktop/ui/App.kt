@@ -426,6 +426,10 @@ private fun Composer(state: ChatState) {
                         LocalLlmButton(state)
                     }
                     DropdownChip(state.model.title, Models.all, { it.title }) { state.chooseModel(it) }
+                    // День 27 — визуальный маркер: выбрана локальная модель → чат работает без облака.
+                    if (state.model.local) {
+                        Text("⚡ локально · без облака", style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
+                    }
                     Spacer(Modifier.weight(1f))
                     if (state.sessionTokens > 0) {
                         val cost = if (state.sessionCost > 0) " · $%.4f".format(state.sessionCost) else ""

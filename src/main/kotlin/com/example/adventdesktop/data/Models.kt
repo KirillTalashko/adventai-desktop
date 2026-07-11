@@ -4,12 +4,15 @@ package com.example.adventdesktop.data
 data class ModelOption(
     val id: String,
     val title: String,
-    val provider: String,          // "openrouter" | "deepseek"
+    val provider: String,          // "openrouter" | "deepseek" | "ollama" (локально)
     val priceInPerMillion: Double,
     val priceOutPerMillion: Double,
     val contextLimit: Int          // лимит контекстного окна (токенов) — для расчёта заполнения
 ) {
     val free: Boolean get() = priceInPerMillion == 0.0 && priceOutPerMillion == 0.0
+
+    /** Локальная модель через Ollama (День 27): своя ветка сборки шлюза, ключ не нужен, работает без облака. */
+    val local: Boolean get() = provider == "ollama"
 
     fun costUsd(promptTokens: Int, completionTokens: Int): Double =
         promptTokens / 1_000_000.0 * priceInPerMillion + completionTokens / 1_000_000.0 * priceOutPerMillion
@@ -21,7 +24,10 @@ object Models {
         ModelOption("deepseek-reasoner", "DeepSeek Reasoner", "deepseek", 0.55, 2.19, 65_536),
         ModelOption("meta-llama/llama-3.3-70b-instruct:free", "Llama 3.3 70B (free)", "openrouter", 0.0, 0.0, 131_072),
         ModelOption("deepseek/deepseek-chat-v3-0324:free", "DeepSeek V3 (free)", "openrouter", 0.0, 0.0, 131_072),
-        ModelOption("google/gemini-2.0-flash-exp:free", "Gemini 2.0 Flash (free)", "openrouter", 0.0, 0.0, 1_000_000)
+        ModelOption("google/gemini-2.0-flash-exp:free", "Gemini 2.0 Flash (free)", "openrouter", 0.0, 0.0, 1_000_000),
+        // День 27 — локальные модели через Ollama (localhost, без облака, ключ не нужен). Цена 0.
+        ModelOption("qwen2.5:7b", "Qwen2.5 7B · локально", "ollama", 0.0, 0.0, 32_768),
+        ModelOption("llama3.2:3b", "Llama 3.2 3B · локально", "ollama", 0.0, 0.0, 131_072)
     )
     val default: ModelOption = all.first()
 

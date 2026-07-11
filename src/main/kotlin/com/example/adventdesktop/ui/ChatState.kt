@@ -11,6 +11,7 @@ import com.example.adventdesktop.data.DocStore
 import com.example.adventdesktop.data.HttpProxy
 import com.example.adventdesktop.data.InvariantStore
 import com.example.adventdesktop.data.LlmClient
+import com.example.adventdesktop.data.LlmGatewayClient
 import com.example.adventdesktop.data.LocalLlmClient
 import com.example.adventdesktop.data.LOCAL_LLM_SAMPLES
 import com.example.adventdesktop.data.LOCAL_LLM_SYSTEM
@@ -126,7 +127,7 @@ class ChatState(
         private set
     var model by mutableStateOf(Models.byId(configStore.load().modelId))
         private set
-    private var client: LlmClient? = null
+    private var client: LlmGatewayClient? = null
     private var agent: VisaAgent? = null
     private var orchestrator: TaskOrchestrator? = null
     private var extractorClient: LlmClient? = null
@@ -1489,12 +1490,21 @@ class ChatState(
         HttpProxy.url = config.httpProxy
         client?.close()
         extractorClient?.close()
-        // Служебный клиент (deepseek) — для извлечения памяти и стража инвариантов: дёшево и стабильно.
-        val extractorLlm = resolveLlmConfig(Models.byId("deepseek-chat"), config)
+        // День 27 — интеграция локальной LLM в основной чат: если выбрана Ollama-модель, главный шлюз агента =
+        // LocalLlmClient (localhost, без прокси и без облака); иначе — облачный LlmClient. Весь агент ниже
+        // (VisaAgent/TaskOrchestrator/…) строится из этого client, поэтому чат целиком отвечает выбранной моделью.
+        client = if (model.local) LocalLlmClient(model = model.id)
+        else resolveLlmConfig(model, config)?.let { LlmClient(it) }
+
+        // Служебный шлюз (память/страж/оффер/CaseExtractor). Облако — дешёвый и стабильный `deepseek`, чтобы не жечь
+        // основную модель на рутине. День 27: при локальной модели служебные вызовы идут в ТУ ЖЕ локаль → НИ ОДНОГО
+        // обращения в облако (требование «работает без облачных моделей»). Облачный extractorClient создаём лишь для cloud.
+        val extractorLlm = if (model.local) null else resolveLlmConfig(Models.byId("deepseek-chat"), config)
         extractorClient = extractorLlm?.let { LlmClient(it) }
-        memoryExtractor = extractorClient?.let { MemoryExtractor(it) }
-        val guard = extractorClient?.let { InvariantGuard(it) }
-        offerAgent = extractorClient?.let { OfferAgent(it) }
+        val serviceGateway = if (model.local) client else extractorClient
+        memoryExtractor = serviceGateway?.let { MemoryExtractor(it) }
+        val guard = serviceGateway?.let { InvariantGuard(it) }
+        offerAgent = serviceGateway?.let { OfferAgent(it) }
 
         // MCP-инструменты для оркестратора (Фаза 2): постоянный гейтвей, лениво подключается при первом вызове.
         // День 18: если задан удалённый MCP (VPS) — агент ходит за инструментами туда (SSE+токен), иначе локально.
@@ -1506,12 +1516,10 @@ class ChatState(
             config.mcpEnabled, config.extraMcpEnabled,
         ) else null
 
-        val llm = resolveLlmConfig(model, config)
-        client = llm?.let { LlmClient(it) }
         agent = client?.let { VisaAgent(it, guard) }
         // День 25: RAG в агенте — ретривер по внутренней базе знаний (детерминированно, без LLM). Тумблер в настройках.
         val retriever = if (config.ragInAgentEnabled) RagKnowledgeRetriever(knowledge(), ::newEmbedder) else null
-        orchestrator = client?.let { TaskOrchestrator(it, guard, tools = agentTools, toolGuard = ToolCallGuard(), serviceGateway = extractorClient, retriever = retriever).apply { invariants = this@ChatState.invariants } }
+        orchestrator = client?.let { TaskOrchestrator(it, guard, tools = agentTools, toolGuard = ToolCallGuard(), serviceGateway = serviceGateway, retriever = retriever).apply { invariants = this@ChatState.invariants } }
         interviewAgent = client?.let { MockInterviewAgent(it) }
         // День 20: навык (Skill + CLI). CLI читает активный аккаунт сам (accounts.json), поэтому id не пробрасываем.
         val runner = CliSkillRunner(accountId = null)
