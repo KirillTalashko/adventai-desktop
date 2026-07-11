@@ -777,9 +777,79 @@ private fun RagDialog(state: ChatState) {
                     }
                 }
                 if (state.citationChecks.isNotEmpty()) CitationEvalView(state.citationChecks)
+
+                // === День 28 — RAG локально vs облако ===
+                HorizontalDivider()
+                Text("День 28 · RAG локально vs облако", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = AppColors.accent)
+                Text(
+                    "Один и тот же ЛОКАЛЬНЫЙ retrieval (эмбеддер nomic-embed-text) → ответ генерируют две модели: " +
+                        "локальная (Ollama) и облачная. Локальная колонка — RAG полностью без облака. Сравните качество, " +
+                        "скорость (задержку) и стабильность.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Локальная модель:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    val localModels = state.localLlmModels.ifEmpty { listOf(state.ragLocalModel) }
+                    DropdownChip(state.ragLocalModel, localModels, { it }) { state.ragLocalModel = it }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = { state.ragCompareLocalVsCloud() },
+                        enabled = state.ragComparison != null && !state.ragVsRunning,
+                        colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)
+                    ) { Text("Ответить: локаль vs облако") }
+                    if (state.ragVsRunning) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                }
+                RagVsView(state)
             }
         }
     )
+}
+
+/** День 28 — сравнение RAG-ответа локальной и облачной модели поверх ОДНОГО локального retrieval. */
+@Composable
+private fun RagVsView(state: ChatState) {
+    val local = state.ragVsLocal
+    val cloud = state.ragVsCloud
+    if (local == null && cloud == null) return
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        if (local?.answer != null && cloud?.answer != null) {
+            val faster = if (local.ms <= cloud.ms) "локальная" else "облачная"
+            Surface(color = AppColors.accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("Оценка", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
+                    Text("• Скорость: локальная ${local.ms} мс · облачная ${cloud.ms} мс → быстрее $faster.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+                    Text("• Контекст идентичен (общий локальный retrieval) — различается только генератор ответа.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+                    Text("• Качество/стабильность оцените глазами: оба ответа опираются на одни источники ниже; локаль пиньована на русский.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+                }
+            }
+        }
+        local?.let { RagVsCard(it, localCol = true) }
+        cloud?.let { RagVsCard(it, localCol = false) }
+        val sources = local?.answer?.sources?.takeIf { it.isNotEmpty() } ?: cloud?.answer?.sources.orEmpty()
+        if (sources.isNotEmpty()) RagEvidence(sources, refused = false)
+    }
+}
+
+/** Одна колонка сравнения (локальная/облачная): модель · задержка · токены + текст ответа. */
+@Composable
+private fun RagVsCard(r: ChatState.RagVsResult, localCol: Boolean) {
+    val accent = if (localCol) AppColors.accent else MaterialTheme.colorScheme.onSurfaceVariant
+    Surface(color = accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            val head = (if (localCol) "⚡ " else "☁ ") + r.label +
+                (r.answer?.let { " · ${r.ms} мс · ${it.usage?.total ?: 0} ток." } ?: "")
+            Text(head, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = accent)
+            when {
+                !r.available -> Text(r.error ?: "недоступно", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                r.error != null -> Text("Ошибка: ${r.error}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                r.answer != null -> {
+                    if (r.answer.abstained) Text("🚫 режим «не знаю» — контекст слабее порога", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                    ExpandableText(r.answer.text, collapsedLines = 6)
+                }
+            }
+        }
+    }
 }
 
 private fun rerankLabel(m: RerankMode): String = when (m) {

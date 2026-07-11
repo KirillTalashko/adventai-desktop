@@ -129,6 +129,16 @@ class KnowledgeIndex(ragDir: File) {
         return ans to trace
     }
 
+    // --- День 28: один ЛОКАЛЬНЫЙ retrieval + генерация произвольным шлюзом (сравнение local vs cloud) ---
+
+    /** Локальный retrieval (эмбеддер), БЕЗ LLM (`gateway=null` → без rewrite/LLM-реранка) — детерминированно и локально. */
+    suspend fun retrieveLocal(embedder: Embedder, options: RagOptions, question: String): List<Scored> =
+        retrieve(gateway = null, embedder = embedder, options = options, question = question).after
+
+    /** Генерация ответа заданным шлюзом поверх УЖЕ найденных чанков (пусто → честное «не знаю», без вызова LLM). */
+    suspend fun generate(gateway: LlmGateway, retrieved: List<Scored>, question: String): RagAnswer =
+        if (retrieved.isEmpty()) RagAnswerer(gateway).abstain(question) else RagAnswerer(gateway).withContext(question, retrieved)
+
     /**
      * Проверка Дня 24 по набору: для каждого вопроса — ответ С RAG, затем критерии «есть источники / есть
      * цитаты / смысл ответа совпадает с цитатами» ([RagFaithfulnessJudge]). На негативном вопросе правильно —
