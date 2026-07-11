@@ -68,7 +68,7 @@ private data class OllamaTagsResponse(val models: List<OllamaTag> = emptyList())
 class LocalLlmClient(
     private val baseUrl: String = "http://localhost:11434",
     private val model: String = DEFAULT_MODEL,
-) : LlmGateway {
+) : LlmGatewayClient {
 
     // encodeDefaults=true → обязательно шлём `stream:false` (иначе Ollama стримит NDJSON и парсинг ломается).
     // explicitNulls=false → не слать null-поля options (temperature/num_predict).
@@ -113,7 +113,7 @@ class LocalLlmClient(
         return GatewayResponse(text, usage)
     }
 
-    fun close() = http.close()
+    override fun close() = http.close()
 
     companion object {
         /** Дефолтная локальная модель Дня 26 (выбор пользователя). Переопределяется в CLI/панели. */

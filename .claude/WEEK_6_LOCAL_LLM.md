@@ -267,8 +267,12 @@ curl http://localhost:11434                        # 4. API (тот же localho
 - **Неделя 6 (Local LLM) — СТАРТОВАЛА.** **День 26 реализован и закоммичен** (`b2ea474`, ветка
   `local-llm-runner`): локальный генеративный gateway `LocalLlmClient` → Ollama `/api/chat` (`qwen2.5:7b`),
   CLI-задача `runLocalLlm`, dev-панель «Локальная LLM» (выбор модели из `/api/tags`, system-промпт с пином
-  русского, `temperature=0.3`, вырезание `<think>`). **Дальше (ДЗ ③):** тумблер cloud↔local + режим сравнения
-  двух ответов, MCP-tool-loop для локальной модели, стриминг.
+  русского, `temperature=0.3`, вырезание `<think>`).
+- **День 27 (интеграция в приложение) — СДЕЛАНО** (ветка `local-llm-chat`): локальные модели (`qwen2.5:7b`,
+  `llama3.2:3b`) в нижнем **селекторе моделей** (провайдер `ollama`); `ChatState.rebuildAgent` ветвит главный
+  шлюз на `LocalLlmClient` → весь агент отвечает локально, **без облака**. Общий data-интерфейс
+  `LlmGatewayClient` (`LlmGateway` + `close()`), бейдж «⚡ локально · без облака», персист в `config.modelId`.
+  **Дальше (ДЗ ③):** режим сравнения cloud↔local с маркировкой, MCP-tool-loop для локальной модели.
 
 ---
 

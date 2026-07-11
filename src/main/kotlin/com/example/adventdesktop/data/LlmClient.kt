@@ -77,8 +77,17 @@ private data class ErrorEnvelope(val error: ErrorBody? = null)
 @Serializable
 private data class ErrorBody(val message: String? = null, val code: Int? = null)
 
+/**
+ * [LlmGateway] с управлением жизненным циклом HTTP-движка (data-слой). Позволяет держать в одном поле и
+ * облачный [LlmClient], и локальный [LocalLlmClient], и корректно закрывать их ресурсы (`close()`). Доменный
+ * порт [LlmGateway] про закрытие ресурсов не знает (Clean Architecture) — это инфраструктурная деталь `data`.
+ */
+interface LlmGatewayClient : LlmGateway {
+    fun close()
+}
+
 /** Реализация порта [LlmGateway] на Ktor + JVM-движок CIO. Ошибки API пробрасываются с понятным текстом. */
-class LlmClient(private val config: LlmConfig) : LlmGateway {
+class LlmClient(private val config: LlmConfig) : LlmGatewayClient {
     // explicitNulls=false → не слать null-поля; encodeDefaults=true → слать поля с дефолтами
     // (иначе у tool-схем выпадает обязательное `type:"function"` → DeepSeek 400).
     private val json = Json { ignoreUnknownKeys = true; isLenient = true; explicitNulls = false; encodeDefaults = true }
@@ -168,7 +177,7 @@ class LlmClient(private val config: LlmConfig) : LlmGateway {
         return WireToolDef(function = WireFunctionDef(t.name, t.description, params))
     }
 
-    fun close() = http.close()
+    override fun close() = http.close()
 
     private companion object {
         /** Предел раундов tool-loop (защита от зацикливания вызовов инструментов). */
