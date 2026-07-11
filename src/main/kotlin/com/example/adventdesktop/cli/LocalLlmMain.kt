@@ -1,8 +1,10 @@
 package com.example.adventdesktop.cli
 
 import com.example.adventdesktop.data.LOCAL_LLM_SAMPLES
+import com.example.adventdesktop.data.LOCAL_LLM_SYSTEM
 import com.example.adventdesktop.data.LlmSample
 import com.example.adventdesktop.data.LocalLlmClient
+import com.example.adventdesktop.domain.LlmParams
 import com.example.adventdesktop.domain.Message
 import com.example.adventdesktop.domain.Role
 import kotlinx.coroutines.runBlocking
@@ -35,7 +37,10 @@ fun main(args: Array<String>) {
                 println("❓ ${s.prompt}")
                 try {
                     val start = System.currentTimeMillis()
-                    val resp = client.complete(listOf(Message(Role.User, s.prompt)))
+                    val resp = client.complete(
+                        listOf(Message(Role.System, LOCAL_LLM_SYSTEM), Message(Role.User, s.prompt)),
+                        params = LlmParams(temperature = 0.3),
+                    )
                     val ms = System.currentTimeMillis() - start
                     val u = resp.usage
                     println("💬 ${resp.text}")

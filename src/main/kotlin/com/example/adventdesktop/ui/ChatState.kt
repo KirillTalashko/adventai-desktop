@@ -13,7 +13,9 @@ import com.example.adventdesktop.data.InvariantStore
 import com.example.adventdesktop.data.LlmClient
 import com.example.adventdesktop.data.LocalLlmClient
 import com.example.adventdesktop.data.LOCAL_LLM_SAMPLES
+import com.example.adventdesktop.data.LOCAL_LLM_SYSTEM
 import com.example.adventdesktop.data.LlmSample
+import com.example.adventdesktop.data.fetchOllamaModels
 import com.example.adventdesktop.data.ModelOption
 import com.example.adventdesktop.data.Models
 import com.example.adventdesktop.data.ProfileStore
@@ -46,6 +48,7 @@ import com.example.adventdesktop.domain.ConversationMeta
 import com.example.adventdesktop.domain.ConversationRepository
 import com.example.adventdesktop.domain.LongTermMemory
 import com.example.adventdesktop.domain.MemoryExtractor
+import com.example.adventdesktop.domain.LlmParams
 import com.example.adventdesktop.domain.MemoryStore
 import com.example.adventdesktop.domain.Message
 import com.example.adventdesktop.domain.MockInterviewAgent
@@ -823,6 +826,9 @@ class ChatState(
     var localLlmOpen by mutableStateOf(false)
         private set
     var localLlmModel by mutableStateOf(LocalLlmClient.DEFAULT_MODEL)
+    /** Установленные в Ollama модели (для выпадашки выбора); заполняется при открытии панели. */
+    var localLlmModels by mutableStateOf<List<String>>(emptyList())
+        private set
     var localLlmPrompt by mutableStateOf("Кратко: что такое шенгенская виза?")
     var localLlmRunning by mutableStateOf(false)
         private set
@@ -831,7 +837,14 @@ class ChatState(
     var localLlmResults by mutableStateOf<List<LocalLlmResult>>(emptyList())
         private set
 
-    fun openLocalLlm() { localLlmOpen = true }
+    fun openLocalLlm() {
+        localLlmOpen = true
+        scope.launch {
+            val models = fetchOllamaModels()
+            localLlmModels = models
+            if (localLlmModel !in models && models.isNotEmpty()) localLlmModel = models.first()
+        }
+    }
     fun closeLocalLlm() { localLlmOpen = false }
 
     /** Один запрос к локальной LLM из поля ввода панели. */
@@ -857,7 +870,12 @@ class ChatState(
             val acc = mutableListOf<LocalLlmResult>()
             for (s in samples) {
                 val start = System.currentTimeMillis()
-                val r = runCatching { client.complete(listOf(Message(Role.User, s.prompt))) }
+                val r = runCatching {
+                    client.complete(
+                        listOf(Message(Role.System, LOCAL_LLM_SYSTEM), Message(Role.User, s.prompt)),
+                        params = LlmParams(temperature = 0.3),
+                    )
+                }
                 val ms = System.currentTimeMillis() - start
                 r.onSuccess { resp ->
                     val u = resp.usage

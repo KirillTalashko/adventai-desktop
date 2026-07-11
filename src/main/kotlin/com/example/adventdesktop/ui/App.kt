@@ -549,10 +549,17 @@ private fun LocalLlmDialog(state: ChatState) {
                 state.localLlmNote?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = AppColors.accent)
                 }
-                OutlinedTextField(
-                    value = state.localLlmModel, onValueChange = { state.localLlmModel = it },
-                    label = { Text("Модель Ollama") }, singleLine = true, modifier = Modifier.fillMaxWidth()
-                )
+                if (state.localLlmModels.isNotEmpty()) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Модель:", style = MaterialTheme.typography.labelLarge)
+                        DropdownChip(state.localLlmModel, state.localLlmModels, { it }) { state.localLlmModel = it }
+                    }
+                } else {
+                    OutlinedTextField(
+                        value = state.localLlmModel, onValueChange = { state.localLlmModel = it },
+                        label = { Text("Модель Ollama (список пуст — впиши вручную)") }, singleLine = true, modifier = Modifier.fillMaxWidth()
+                    )
+                }
                 OutlinedTextField(
                     value = state.localLlmPrompt, onValueChange = { state.localLlmPrompt = it },
                     label = { Text("Ваш запрос") }, maxLines = 4, modifier = Modifier.fillMaxWidth()
