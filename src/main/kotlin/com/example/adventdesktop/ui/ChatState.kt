@@ -15,6 +15,9 @@ import com.example.adventdesktop.data.LlmGatewayClient
 import com.example.adventdesktop.data.LocalLlmClient
 import com.example.adventdesktop.data.LOCAL_LLM_SAMPLES
 import com.example.adventdesktop.data.LOCAL_LLM_SYSTEM
+import com.example.adventdesktop.data.LocalRun
+import com.example.adventdesktop.data.LocalTuning
+import com.example.adventdesktop.data.OPT_TASK_PROMPT
 import com.example.adventdesktop.data.LlmSample
 import com.example.adventdesktop.data.fetchOllamaModels
 import com.example.adventdesktop.data.ModelOption
@@ -897,6 +900,54 @@ class ChatState(
                 localLlmNote = "Локальная модель недоступна. Запусти `ollama serve` и `ollama pull $model`."
             }
             localLlmRunning = false
+        }
+    }
+
+    // --- День 29: оптимизация локальной модели под задачу (A/B «до vs после») ---
+
+    var optRunning by mutableStateOf(false)
+        private set
+    var optBefore by mutableStateOf<LocalRun?>(null)
+        private set
+    var optAfter by mutableStateOf<LocalRun?>(null)
+        private set
+    var optModel by mutableStateOf(LocalLlmClient.DEFAULT_MODEL)
+    var optTask by mutableStateOf(
+        "Гражданин РФ едет в Германию на 7 дней с целью туризма. Какие ключевые документы нужны на шенгенскую визу?"
+    )
+    var optSystem by mutableStateOf(OPT_TASK_PROMPT)
+    var optTemperature by mutableStateOf(0.2f)
+    var optMaxTokens by mutableStateOf("256")
+    var optNumCtx by mutableStateOf("4096")
+
+    /**
+     * День 29 — A/B «до vs после оптимизации» на одной задаче: baseline (общий промпт + дефолты Ollama) против
+     * tuned (задачный промпт-шаблон + temperature/max tokens/context window). Модель/квант — [optModel] (общая;
+     * смени её и прогони снова, чтобы сравнить кванты). Метрики: задержка, токены, throughput (ток/с).
+     */
+    fun optimizeCompare() {
+        val task = optTask.trim()
+        if (task.isEmpty() || optRunning) return
+        optRunning = true
+        localLlmNote = null
+        optBefore = null
+        optAfter = null
+        scope.launch {
+            val client = LocalLlmClient()
+            runCatching {
+                optBefore = client.runTuned(task, LocalTuning(model = optModel))   // baseline: общий промпт + дефолты
+                optAfter = client.runTuned(                                        // tuned: задачный шаблон + ручки
+                    task,
+                    LocalTuning(
+                        model = optModel, system = optSystem,
+                        temperature = optTemperature.toDouble(),
+                        numPredict = optMaxTokens.toIntOrNull(),
+                        numCtx = optNumCtx.toIntOrNull(),
+                    ),
+                )
+            }.onFailure { localLlmNote = "Ошибка оптимизации: ${it.message}" }
+            runCatching { client.close() }
+            optRunning = false
         }
     }
 

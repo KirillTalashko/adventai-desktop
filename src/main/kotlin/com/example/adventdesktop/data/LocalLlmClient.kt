@@ -28,7 +28,14 @@ private data class OllamaChatMessage(val role: String, val content: String = "")
 
 /** Параметры генерации Ollama (подмножество). `null`-поля не сериализуются → берётся дефолт модели. */
 @Serializable
-private data class OllamaOptions(val temperature: Double? = null, val num_predict: Int? = null)
+private data class OllamaOptions(
+    val temperature: Double? = null,
+    val num_predict: Int? = null,   // max tokens (выход)
+    val num_ctx: Int? = null,       // context window (День 29)
+    val top_p: Double? = null,
+    val repeat_penalty: Double? = null,
+    val seed: Int? = null,
+)
 
 @Serializable
 private data class OllamaChatRequest(
@@ -43,6 +50,8 @@ private data class OllamaChatResponse(
     val message: OllamaChatMessage? = null,
     val prompt_eval_count: Int = 0, // токены промпта (вход)
     val eval_count: Int = 0,        // токены генерации (выход)
+    val total_duration: Long = 0,   // нс — общее время (День 29)
+    val eval_duration: Long = 0,    // нс — время генерации → throughput ток/с
     val done: Boolean = false,
 )
 
@@ -92,7 +101,37 @@ class LocalLlmClient(
         val options = if (params.temperature != null || params.maxTokens != null) {
             OllamaOptions(temperature = params.temperature, num_predict = params.maxTokens)
         } else null
+        val body = postChat(model, wire, options)
+        val text = stripThink(body.message?.content)
+        if (text.isEmpty()) error("Локальная модель $model вернула пустой ответ.")
+        val usage = TokenUsage(body.prompt_eval_count, body.eval_count, body.prompt_eval_count + body.eval_count)
+        return GatewayResponse(text, usage)
+    }
 
+    /**
+     * День 29 — прогон под тюнинг с богатыми метриками (throughput ток/с из `eval_duration`, wall-clock).
+     * Модель (квант), system-промпт и все ручки (temperature/num_predict/num_ctx/top_p/…) берутся из [tuning] —
+     * для A/B «до vs после оптимизации» и сравнения квантов.
+     */
+    suspend fun runTuned(user: String, tuning: LocalTuning): LocalRun {
+        val wire = listOf(OllamaChatMessage("system", tuning.system), OllamaChatMessage("user", user))
+        val options = OllamaOptions(
+            temperature = tuning.temperature, num_predict = tuning.numPredict, num_ctx = tuning.numCtx,
+            top_p = tuning.topP, repeat_penalty = tuning.repeatPenalty, seed = tuning.seed,
+        )
+        val start = System.currentTimeMillis()
+        val body = postChat(tuning.model, wire, options)
+        val ms = System.currentTimeMillis() - start
+        val tokPerSec = if (body.eval_duration > 0) body.eval_count * 1_000_000_000.0 / body.eval_duration else 0.0
+        return LocalRun(
+            text = stripThink(body.message?.content).ifEmpty { "(пустой ответ)" },
+            promptTokens = body.prompt_eval_count, evalTokens = body.eval_count,
+            totalTokens = body.prompt_eval_count + body.eval_count, tokPerSec = tokPerSec, ms = ms,
+        )
+    }
+
+    /** Один POST `/api/chat` (stream=false) с обработкой ошибок — общий для [complete] и [runTuned] (DRY). */
+    private suspend fun postChat(model: String, wire: List<OllamaChatMessage>, options: OllamaOptions?): OllamaChatResponse {
         val resp: HttpResponse = runCatching {
             http.post("$baseUrl/api/chat") {
                 contentType(ContentType.Application.Json)
@@ -104,14 +143,11 @@ class LocalLlmClient(
         if (!resp.status.isSuccess()) {
             error("Ollama ${resp.status}: ${resp.bodyAsText().take(300)}. Проверь, что модель есть: `ollama pull $model`.")
         }
-
-        val body: OllamaChatResponse = resp.body()
-        // Qwen3 и другие «думающие» модели оборачивают рассуждение в <think>…</think> — вырезаем, оставляем ответ.
-        val text = body.message?.content.orEmpty().replace(THINK_REGEX, "").trim()
-        if (text.isEmpty()) error("Локальная модель $model вернула пустой ответ.")
-        val usage = TokenUsage(body.prompt_eval_count, body.eval_count, body.prompt_eval_count + body.eval_count)
-        return GatewayResponse(text, usage)
+        return resp.body()
     }
+
+    // «Думающие» модели (Qwen3 и т.п.) оборачивают рассуждение в <think>…</think> — вырезаем, оставляем ответ.
+    private fun stripThink(content: String?): String = content.orEmpty().replace(THINK_REGEX, "").trim()
 
     override fun close() = http.close()
 
@@ -151,6 +187,55 @@ suspend fun fetchOllamaModels(baseUrl: String = "http://localhost:11434"): List<
 const val LOCAL_LLM_SYSTEM =
     "Ты — визовый ассистент. Отвечай только на русском языке и не переходи на другие языки в течение всего " +
         "ответа (особенно не используй китайский). Пиши понятно и по делу."
+
+/**
+ * День 29 — продуктовый промпт-шаблон под конкретный кейс (чек-лист документов на визу): роль + грунтовка
+ * против галлюцинаций + адаптивность + жёсткий формат с образцом. Тюнинговый («после») промпт для A/B против
+ * общего [LOCAL_LLM_SYSTEM]. Маленькой локальной модели (qwen2.5:7b) нужны явные правила и пример формата.
+ */
+val OPT_TASK_PROMPT = """
+    Ты — практикующий визовый консультант. В этом режиме твоя единственная задача — по описанию поездки собрать точный, готовый к применению чек-лист документов для подачи на визу.
+
+    Правила:
+    • Язык — ТОЛЬКО русский. Ни одного иностранного слова или иероглифа, даже в уточнениях.
+    • Перечисляй лишь документы, реально нужные для указанной страны и типа визы. Не добавляй экзотику «на всякий случай» и не выдумывай точные сроки и суммы, если не уверен.
+    • Если страна или цель поездки не указаны — собери базовый пакет для этого класса виз и пометь в уточнениях, что часть требований зависит от страны и консульства.
+    • Не обещай одобрения визы. Финальный список всегда сверяется на официальном сайте консульства.
+
+    Формат — строго:
+    • Только нумерованный список из 4–6 пунктов (самые важные — первыми). Без markdown, эмодзи и заголовков.
+    • Строка = «N. Документ — уточнение в 3–7 словах (каким быть или зачем нужен)».
+    • Без вступления и заключения. Начни сразу с «1.» и закончи последним пунктом.
+
+    Образец формы (повторяй структуру, а не текст):
+    1. Загранпаспорт — действителен ещё 3+ месяца после поездки.
+    2. Визовая анкета — заполнена и подписана заявителем.
+""".trimIndent()
+
+/**
+ * Тюнинг локальной генерации (День 29): модель (квант), system-промпт и ручки Ollama options.
+ * `null`-поля → дефолт модели. Для A/B «до vs после оптимизации».
+ */
+data class LocalTuning(
+    val model: String = LocalLlmClient.DEFAULT_MODEL,
+    val system: String = LOCAL_LLM_SYSTEM,
+    val temperature: Double? = null,
+    val numPredict: Int? = null,     // max tokens (выход)
+    val numCtx: Int? = null,         // context window
+    val topP: Double? = null,
+    val repeatPenalty: Double? = null,
+    val seed: Int? = null,
+)
+
+/** Результат прогона с метриками (День 29): текст, токены, throughput (ток/с), wall-clock (мс). */
+data class LocalRun(
+    val text: String,
+    val promptTokens: Int,
+    val evalTokens: Int,
+    val totalTokens: Int,
+    val tokPerSec: Double,
+    val ms: Long,
+)
 
 /** Демо-запрос для проверки локальной LLM (День 26): метка сложности + текст. */
 data class LlmSample(val level: String, val prompt: String)
