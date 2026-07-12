@@ -594,7 +594,7 @@ private fun LocalLlmDialog(state: ChatState) {
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 OutlinedTextField(value = state.optTask, onValueChange = { state.optTask = it }, label = { Text("Задача (запрос)") }, maxLines = 3, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = state.optSystem, onValueChange = { state.optSystem = it }, label = { Text("Промпт-шаблон «После» (под кейс)") }, maxLines = 4, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = state.optSystem, onValueChange = { state.optSystem = it }, label = { Text("Промпт-шаблон «После» (под кейс)") }, maxLines = 10, modifier = Modifier.fillMaxWidth())
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Temp: %.2f".format(state.optTemperature), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Slider(value = state.optTemperature, onValueChange = { state.optTemperature = it }, valueRange = 0f..1f, modifier = Modifier.weight(1f))
