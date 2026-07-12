@@ -277,6 +277,12 @@ curl http://localhost:11434                        # 4. API (тот же localho
   `nomic-embed-text` + локальная генерация) + сравнение **локаль vs облако** поверх ОДНОГО retrieval.
   `KnowledgeIndex.retrieveLocal`/`generate` (retrieval отделён от генерации); блок «День 28» в RAG-панели: две
   колонки с ответами, задержкой и токенами, общие источники. ДЗ ③ (сравнение) закрыто для RAG.
+  Влито в `main` (PR #21, squash `df61012`).
+- **День 29 (оптимизация локальной LLM) — СДЕЛАНО** (ветка `local-llm-tuning`): тюнинг под задачу + A/B «до vs
+  после». `LocalLlmClient`: расширены Ollama options (`num_ctx`/`top_p`/`repeat_penalty`/`seed`) и метрики
+  (`eval_duration` → throughput ток/с); метод `runTuned(user, LocalTuning)` + типы `LocalTuning`/`LocalRun`;
+  промпт-шаблон под кейс `OPT_TASK_PROMPT`. Блок «День 29» в панели «Локальная LLM»: задача + параметры
+  (temperature/max tokens/context window) + выбор кванта → два прогона (до/после) с задержкой, ток/с, токенами.
 
 ---
 
