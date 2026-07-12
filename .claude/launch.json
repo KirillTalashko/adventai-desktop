@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "desktop-app",
+      "runtimeExecutable": "gradlew.bat",
+      "runtimeArgs": ["run"]
+    },
+    {
+      "name": "mcp-sse-server",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set MCP_TRANSPORT=sse&& set MCP_HOST=127.0.0.1&& set MCP_PORT=3001&& java -jar build/libs/visa-mcp-server-all.jar"
+      ],
+      "port": 3001
+    }
+  ]
+}
