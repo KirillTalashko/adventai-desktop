@@ -91,6 +91,7 @@ import java.awt.Desktop
 import java.net.URI
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.adventdesktop.data.LocalRun
 import com.example.adventdesktop.data.Models
 import com.example.adventdesktop.domain.Awaiting
 import com.example.adventdesktop.domain.Message
@@ -581,6 +582,45 @@ private fun LocalLlmDialog(state: ChatState) {
                     if (state.localLlmRunning) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
                 }
                 state.localLlmResults.forEach { LocalLlmResultCard(it) }
+
+                // === День 29 — оптимизация под задачу (до vs после) ===
+                HorizontalDivider()
+                Text("День 29 · Оптимизация под задачу (до vs после)", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = AppColors.accent)
+                Text(
+                    "Настройте локальную модель под конкретный кейс и сравните ДО/ПОСЛЕ. «До» — общий промпт и " +
+                        "дефолты Ollama; «После» — задачный шаблон + ваши параметры (temperature · max tokens · context " +
+                        "window). Метрики: задержка, токены, throughput (ток/с). Чтобы сравнить квантование — установите " +
+                        "другой квант (напр. ollama pull qwen2.5:7b-instruct-q8_0), выберите его в «Модель» выше и прогоните снова.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(value = state.optTask, onValueChange = { state.optTask = it }, label = { Text("Задача (запрос)") }, maxLines = 3, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = state.optSystem, onValueChange = { state.optSystem = it }, label = { Text("Промпт-шаблон «После» (под кейс)") }, maxLines = 4, modifier = Modifier.fillMaxWidth())
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Temp: %.2f".format(state.optTemperature), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Slider(value = state.optTemperature, onValueChange = { state.optTemperature = it }, valueRange = 0f..1f, modifier = Modifier.weight(1f))
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(value = state.optMaxTokens, onValueChange = { state.optMaxTokens = it.filter(Char::isDigit) }, label = { Text("Max tokens") }, singleLine = true, modifier = Modifier.weight(1f))
+                    OutlinedTextField(value = state.optNumCtx, onValueChange = { state.optNumCtx = it.filter(Char::isDigit) }, label = { Text("Context window") }, singleLine = true, modifier = Modifier.weight(1f))
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(onClick = { state.optimizeCompare() }, enabled = !state.optRunning && state.optTask.isNotBlank(), colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)) { Text("Сравнить: до vs после") }
+                    if (state.optRunning) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                }
+                state.optBefore?.let { OptRunCard("До — общий промпт + дефолты", it, tuned = false) }
+                state.optAfter?.let { OptRunCard("После — шаблон под кейс + тюнинг", it, tuned = true) }
+                val optB = state.optBefore
+                val optA = state.optAfter
+                if (optB != null && optA != null) {
+                    Surface(color = AppColors.accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text("Разница (до → после)", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
+                            Text("• Скорость: ${optB.ms} → ${optA.ms} мс · throughput ${"%.0f".format(optB.tokPerSec)} → ${"%.0f".format(optA.tokPerSec)} ток/с.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+                            Text("• Ресурсы: выход ${optB.evalTokens} → ${optA.evalTokens} ток. (лимит max tokens + короткий шаблон обычно снижают расход и ускоряют).", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+                            Text("• Качество — оцените глазами: задачный шаблон даёт строгий формат (нумерованный список без воды).", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                }
             }
         }
     )
@@ -611,6 +651,22 @@ private fun LocalLlmResultCard(r: ChatState.LocalLlmResult) {
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+        }
+    }
+}
+
+/** День 29 — карточка одного прогона (до/после): метрики (задержка, ток/с, токены) + текст ответа. */
+@Composable
+private fun OptRunCard(label: String, r: LocalRun, tuned: Boolean) {
+    val accent = if (tuned) AppColors.accent else MaterialTheme.colorScheme.onSurfaceVariant
+    Surface(color = accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(label, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = accent)
+            Text(
+                "⏱ ${r.ms} мс · ${"%.0f".format(r.tokPerSec)} ток/с · вход ${r.promptTokens} / выход ${r.evalTokens} ток.",
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            ExpandableText(r.text, collapsedLines = 6)
         }
     }
 }
