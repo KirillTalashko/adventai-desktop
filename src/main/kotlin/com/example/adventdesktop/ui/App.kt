@@ -621,6 +621,38 @@ private fun LocalLlmDialog(state: ChatState) {
                         }
                     }
                 }
+
+                // === День 30 — обращение к приватному LLM-сервису по HTTP ===
+                HorizontalDivider()
+                Text("День 30 · Обращение к сервису по HTTP", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = AppColors.accent)
+                Text(
+                    "Приложение как HTTP-клиент к приватному LLM-сервису. Подними сервис (gradlew runLocalLlmService), " +
+                        "укажи URL и токен. URL — любой: localhost, IP в сети (подними с LLM_HOST=0.0.0.0) или домен. " +
+                        "«Прогнать 3 вопроса» — батч по сети; «Нагрузка ×6» — лимиты (429 rate-limit / 503 занят).",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(value = state.serviceUrl, onValueChange = { state.serviceUrl = it }, label = { Text("URL сервиса") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = state.serviceToken, onValueChange = { state.serviceToken = it }, label = { Text("Токен (LLM_AUTH_TOKEN, если задан)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { state.serviceHealth() }, enabled = !state.serviceRunning, colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)) { Text("GET /health") }
+                    Button(onClick = { state.serviceChat() }, enabled = !state.serviceRunning, colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)) { Text("POST /chat") }
+                    if (state.serviceRunning) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { state.serviceRunSamples() }, enabled = !state.serviceRunning, colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)) { Text("Прогнать 3 вопроса") }
+                    TextButton(onClick = { state.serviceBurst() }, enabled = !state.serviceRunning) { Text("Нагрузка ×6") }
+                }
+                if (state.serviceLog.isNotEmpty()) {
+                    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text("Ответы сервиса (свежие сверху):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                TextButton(onClick = { state.clearServiceLog() }) { Text("очистить", style = MaterialTheme.typography.labelSmall) }
+                            }
+                            state.serviceLog.asReversed().forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface) }
+                        }
+                    }
+                }
             }
         }
     )

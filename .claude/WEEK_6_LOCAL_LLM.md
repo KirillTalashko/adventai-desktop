@@ -283,6 +283,14 @@ curl http://localhost:11434                        # 4. API (тот же localho
   (`eval_duration` → throughput ток/с); метод `runTuned(user, LocalTuning)` + типы `LocalTuning`/`LocalRun`;
   промпт-шаблон под кейс `OPT_TASK_PROMPT`. Блок «День 29» в панели «Локальная LLM»: задача + параметры
   (temperature/max tokens/context window) + выбор кванта → два прогона (до/после) с задержкой, ток/с, токенами.
+  Влито в `main` (PR #22 `d3528aa`; фикс дрейфа на китайский — усилен `OPT_TASK_PROMPT`, PR #23 `ad9e43f`).
+- **День 30 (локальная LLM как приватный сервис) — СДЕЛАНО** (ветка `local-llm-service`): Ktor-сервер
+  `service/LocalLlmService` вокруг `LocalLlmClient` — `GET /health` + `POST /chat` (bearer-токен), бинд на
+  loopback за reverse-proxy (паттерн `VisaMcpServer`). Базовые лимиты: rate-limit (`429`), max-context (`413`),
+  кап параллелизма (`503`). Всё через env. Задачи `llmServiceJar` (fat-jar) / `runLocalLlmService` / `runLlmServiceDemo`.
+  Локально проверено: health/chat/401/413 + всплеск 6 при rate=4/inflight=2 → **2×200·2×429·2×503**. Деплой
+  (systemd + Caddy + токен, loopback) — плейсхолдеры в `LLM_SERVICE.md` (реальные домен/токен НЕ в git). Ollama на
+  сервере нужна отдельно (на слабом VPS — модель поменьше).
 
 ---
 
