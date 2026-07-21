@@ -20,10 +20,12 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import com.example.adventdesktop.domain.runCatchingCancellable
 
 /**
  * День 30 — **приватный AI-сервис на базе локальной LLM**. Тонкий HTTP-фасад вокруг [LocalLlmClient] (Ollama):
@@ -119,15 +121,18 @@ fun main() {
             call.respondText(json.encodeToString(ErrorResponse("rate limit exceeded ($ratePerMin/min)")), ContentType.Application.Json, HttpStatusCode.TooManyRequests)
             return
         }
-        val req = runCatching { json.decodeFromString<ChatRequest>(call.receiveText()) }.getOrNull()
-        if (req == null || (req.prompt.isNullOrBlank() && req.messages.isEmpty())) {
+        val req = runCatchingCancellable { json.decodeFromString<ChatRequest>(call.receiveText()) }.getOrNull()
+        val userPrompt = req?.prompt?.takeIf { it.isNotBlank() }
+        // Единый источник истины: собираем messages ЛИБО получаем null → 400 (без force-unwrap prompt!!).
+        val messages: List<Message>? = when {
+            req == null -> null
+            req.messages.isNotEmpty() -> req.messages.map { Message(roleOf(it.role), it.content) }
+            userPrompt != null -> listOf(Message(Role.System, LOCAL_LLM_SYSTEM), Message(Role.User, userPrompt))
+            else -> null
+        }
+        if (req == null || messages == null) {   // req == null ⇒ messages == null; проверка сужает req к non-null ниже
             call.respondText(json.encodeToString(ErrorResponse("bad request: нужен 'prompt' или 'messages'")), ContentType.Application.Json, HttpStatusCode.BadRequest)
             return
-        }
-        val messages = if (req.messages.isNotEmpty()) {
-            req.messages.map { Message(roleOf(it.role), it.content) }
-        } else {
-            listOf(Message(Role.System, LOCAL_LLM_SYSTEM), Message(Role.User, req.prompt!!))
         }
         val totalChars = messages.sumOf { it.text.length }
         if (totalChars > maxChars) {
@@ -148,10 +153,12 @@ fun main() {
                 json.encodeToString(ChatResponse(resp.text, model, u?.prompt ?: 0, u?.completion ?: 0, u?.total ?: 0, ms)),
                 ContentType.Application.Json,
             )
+        } catch (e: CancellationException) {
+            throw e   // клиент отвалился / сервер гасится — не выдаём это за «generation error»
         } catch (e: Exception) {
             call.respondText(json.encodeToString(ErrorResponse("generation error: ${e.message}")), ContentType.Application.Json, HttpStatusCode.InternalServerError)
         } finally {
-            inflight.release()
+            inflight.release()   // семафор освобождаем и при отмене тоже
         }
     }
 

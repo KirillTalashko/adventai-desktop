@@ -4,6 +4,7 @@ import com.example.adventdesktop.domain.LlmGateway
 import com.example.adventdesktop.domain.LlmParams
 import com.example.adventdesktop.domain.Message
 import com.example.adventdesktop.domain.Role
+import com.example.adventdesktop.domain.runCatchingCancellable
 
 /**
  * Проверка одного контрольного вопроса по критериям Дня 24: есть ли ИСТОЧНИКИ, есть ли ЦИТАТЫ и совпадает ли
@@ -42,7 +43,7 @@ class RagFaithfulnessJudge(private val gateway: LlmGateway) {
             "которых он должен основываться. Ответь ОДНИМ словом: ДА — если смысл ответа согласуется с " +
             "фрагментами, не противоречит им и не добавляет важных фактов, которых в них нет; иначе НЕТ."
         val user = "ОТВЕТ:\n$answer\n\nФРАГМЕНТЫ:\n$listing"
-        val resp = runCatching {
+        val resp = runCatchingCancellable {
             gateway.complete(listOf(Message(Role.System, sys), Message(Role.User, user)), params = LlmParams(temperature = 0.0))
         }.getOrNull() ?: return false
         return verdictIsYes(resp.text)

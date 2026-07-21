@@ -66,9 +66,9 @@ class TaskOrchestrator(
      * решает КОД ([CaseFile.isReadyForPlan]), а не флака-тег. `[SIMPLE]` → инфо/привет/недопустимо (кейс
      * не заводим). Разворот (смена страны/цели) — через подтверждение ([TaskContext.pivotTo]).
      */
-    suspend fun intake(ctx0: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatching {
+    suspend fun intake(ctx0: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatchingCancellable {
         // Ждали «да/нет» на разворот? Разбираем ДО обращения к LLM.
-        if (ctx0.pivotTo.isNotBlank()) return@runCatching resolvePivot(ctx0, history)
+        if (ctx0.pivotTo.isNotBlank()) return@runCatchingCancellable resolvePivot(ctx0, history)
 
         // 1) СНАЧАЛА детерминированно обновляем досье из слов пользователя (отдельный «писарь»).
         val updatedCase = caseExtractor.update(history, ctx0.caseFile)
@@ -76,7 +76,7 @@ class TaskOrchestrator(
         if (ctx0.plan.isNotEmpty() && updatedCase.isPivotFrom(ctx0.caseFile)) {
             val to = updatedCase.destination.ifBlank { updatedCase.purpose }
             val q = "Вы переключаетесь на «$to»? Это новый кейс — ответьте «да», и я начну заново (текущий план сбросится), или «нет», чтобы продолжить текущий."
-            return@runCatching TaskStep(AgentReply(q, null), ctx0.copy(awaiting = Awaiting.ANSWER, prompt = q, pivotTo = to))
+            return@runCatchingCancellable TaskStep(AgentReply(q, null), ctx0.copy(awaiting = Awaiting.ANSWER, prompt = q, pivotTo = to))
         }
         // Гражданство — устойчивый признак личности: если пользователь не назвал его в диалоге, засеваем из
         // профиля (анти-бленд для фактов ПОЕЗДКИ — страна/даты/цель — сохраняется: их из профиля не берём).
@@ -88,7 +88,7 @@ class TaskOrchestrator(
         // 2) Интервьюер ВЕДЁТ разговор, видя актуальное [ДОСЬЕ]; классифицирует и спрашивает недостающее.
         val resp = call(INTERVIEWER, ctx, history, profile, INTAKE_INSTRUCTION, guarded = true, useTools = true, roleId = TunableRole.INTERVIEWER.id, ragBlock = ragBlock)
         val shown = withTrace(resp, ctx.docs)
-        if (hasTag(resp.text, "SIMPLE")) return@runCatching TaskStep(AgentReply(shown, resp.usage, hits), ctx0, cancel = true)
+        if (hasTag(resp.text, "SIMPLE")) return@runCatchingCancellable TaskStep(AgentReply(shown, resp.usage, hits), ctx0, cancel = true)
 
         // День 19: если интервьюер уже вызвал get_visa_requirements — переиспользуем его синтез (актуальные
         // данные + ОФИЦ. ссылки), кладём в [research], чтобы цитировали все стадии без повторного платного вызова.
@@ -124,7 +124,7 @@ class TaskOrchestrator(
             if (cf.purpose.isNotBlank()) append(",\"purpose\":").append(jsonStr(cf.purpose))
             append("}")
         }
-        val result = runCatching { gw.callToolJson("get_visa_requirements", args) }.getOrNull()
+        val result = runCatchingCancellable { gw.callToolJson("get_visa_requirements", args) }.getOrNull()
         return if (result != null && isUsableResearch("get_visa_requirements", result)) ctx.copy(research = capResearch(result)) else ctx
     }
 
@@ -164,7 +164,7 @@ class TaskOrchestrator(
     }
 
     /** PLANNING (1/2): планировщик предлагает 4 подхода → выбор пользователя ([Awaiting.CHOICE]). */
-    suspend fun proposeOptions(ctx0: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatching {
+    suspend fun proposeOptions(ctx0: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatchingCancellable {
         val ctx = ensureResearch(ctx0)   // справка (актуальные данные + ссылки) — один раз, перед планированием
         val resp = call(PLANNER_OPTIONS, ctx, history, profile, "Предложи 4 разных подхода. Верни блок [OPTIONS]…[/OPTIONS].", roleId = TunableRole.PLANNER.id, params = LlmParams(temperature = TEMP_CREATIVE))
         val options = parseList(resp.text, "OPTIONS")
@@ -174,11 +174,11 @@ class TaskOrchestrator(
     }
 
     /** PLANNING (2/2): построить план под выбранный подход (`ctx.approach`) → чекпоинт плана → EXECUTION. */
-    suspend fun buildPlan(ctx0: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatching {
+    suspend fun buildPlan(ctx0: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatchingCancellable {
         val ctx = ensureResearch(ctx0)
         val resp = call(PLANNER_PLAN, ctx, history, profile, "Построй пошаговый план под выбранный подход. Верни блок [PLAN]…[/PLAN].", roleId = TunableRole.PLANNER.id)
         val plan = parseList(resp.text, "PLAN")
-        if (plan.isEmpty()) return@runCatching TaskStep(AgentReply(clean(resp.text), resp.usage), ctx.copy(awaiting = Awaiting.NONE))
+        if (plan.isEmpty()) return@runCatchingCancellable TaskStep(AgentReply(clean(resp.text), resp.usage), ctx.copy(awaiting = Awaiting.NONE))
         val next = ctx.copy(plan = plan, step = 0, done = emptyList(), note = "", options = emptyList(), awaiting = Awaiting.NONE)
             .transitionTo(TaskState.EXECUTION)
         // Показываем план явно (а не вырезанный [PLAN]-блок) — это чекпоинт перед выполнением.
@@ -191,7 +191,7 @@ class TaskOrchestrator(
     }
 
     /** Один ход EXECUTION или VALIDATION (кнопка «Продолжить» / после загрузки документа). */
-    suspend fun step(ctx: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatching {
+    suspend fun step(ctx: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatchingCancellable {
         when (ctx.state) {
             TaskState.EXECUTION -> execute(ctx, history, profile)
             TaskState.VALIDATION -> validate(ctx, history, profile)
@@ -266,7 +266,7 @@ class TaskOrchestrator(
                     }
                     val msgs = listOf(Message(Role.System, sys)) + history.takeLast(windowSize) +
                         Message(Role.User, "Проверь результат СТРОГО со своего ракурса. Недостающие документы пользователя (приложит позже) — НЕ повод для revise. Заверши строкой [VERDICT] pass | revise: <что доработать>.")
-                    val text = runCatching { gw.complete(msgs, params = LlmParams(temperature = TEMP_PRECISE)) }.getOrNull()?.text.orEmpty()
+                    val text = runCatchingCancellable { gw.complete(msgs, params = LlmParams(temperature = TEMP_PRECISE)) }.getOrNull()?.text.orEmpty()
                     parseTagged(text, "VERDICT").orEmpty()
                 }
             }.awaitAll()
@@ -297,14 +297,14 @@ class TaskOrchestrator(
     }
 
     /** Ответ на вопрос/реплику пользователя в контексте задачи БЕЗ изменения автомата (#2). Распознаёт разворот. */
-    suspend fun assist(ctx: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatching {
+    suspend fun assist(ctx: TaskContext, history: List<Message>, profile: UserProfile?): Result<TaskStep> = runCatchingCancellable {
         val (ragBlock, hits) = ragContext(ctx, history)   // День 25: контекст из внутренней базы под вопрос
         val resp = call(ASSISTANT, ctx, history, profile, ASSIST_INSTRUCTION, historyLimit = 8, guarded = true, useTools = true, roleId = TunableRole.ASSISTANT.id, ragBlock = ragBlock)
         val shown = withTrace(resp, ctx.docs)
         // Пользователь хочет ДРУГУЮ страну/цель → ассистент пометил [PIVOT] <страна>: ждём подтверждения, план не трогаем.
         val pivot = parseTagged(resp.text, "PIVOT")
         if (pivot != null) {
-            return@runCatching TaskStep(AgentReply(shown, resp.usage, hits), ctx.copy(awaiting = Awaiting.ANSWER, prompt = clean(resp.text), pivotTo = pivot))
+            return@runCatchingCancellable TaskStep(AgentReply(shown, resp.usage, hits), ctx.copy(awaiting = Awaiting.ANSWER, prompt = clean(resp.text), pivotTo = pivot))
         }
         TaskStep(AgentReply(shown, resp.usage, hits), ctx)
     }
@@ -384,7 +384,7 @@ class TaskOrchestrator(
         val cf = ctx.caseFile
         val hint = listOf(cf.destination, cf.purpose).filter { it.isNotBlank() }.joinToString(" ")
         val query = if (hint.isBlank()) base else "$hint $base"
-        val hits = runCatching { r.retrieve(query) }.getOrDefault(emptyList())
+        val hits = runCatchingCancellable { r.retrieve(query) }.getOrDefault(emptyList())
         if (hits.isEmpty()) return EMPTY_RAG
         val block = buildString {
             append("[БАЗА ЗНАНИЙ — выдержки из наших внутренних визовых документов; ссылайся на источники как [S1], [S2]. ")
@@ -453,7 +453,7 @@ class TaskOrchestrator(
         // есть get_visa_requirements (богатый research). Их использует только демо-пайплайн «Инструменты MCP».
         val gw = tools
         val toolList = if (useTools && gw != null)
-            runCatching { gw.listTools() }.getOrDefault(emptyList()).filterNot { it.name in PIPELINE_TOOLS }
+            runCatchingCancellable { gw.listTools() }.getOrDefault(emptyList()).filterNot { it.name in PIPELINE_TOOLS }
         else emptyList()
         val executeTool: (suspend (String, String) -> String)? =
             if (gw != null && toolList.isNotEmpty()) { name, args ->

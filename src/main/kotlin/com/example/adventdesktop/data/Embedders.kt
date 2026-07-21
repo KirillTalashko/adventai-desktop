@@ -16,6 +16,7 @@ import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import com.example.adventdesktop.domain.runCatchingCancellable
 
 @Serializable
 private data class OllamaEmbedRequest(val model: String, val prompt: String)
@@ -47,7 +48,7 @@ class OllamaEmbedder(
     }
 
     override suspend fun embed(text: String): FloatArray {
-        val resp: HttpResponse = runCatching {
+        val resp: HttpResponse = runCatchingCancellable {
             http.post("$baseUrl/api/embeddings") {
                 contentType(ContentType.Application.Json)
                 setBody(OllamaEmbedRequest(model, text.ifBlank { " " }))

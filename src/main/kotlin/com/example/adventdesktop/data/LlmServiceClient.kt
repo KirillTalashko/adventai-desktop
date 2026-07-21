@@ -12,6 +12,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -51,6 +52,8 @@ class LlmServiceClient(baseUrl: String, private val token: String?) {
         return try {
             val r = block()
             ServiceCall(r.status.value, r.bodyAsText(), System.currentTimeMillis() - start)
+        } catch (e: CancellationException) {
+            throw e   // отмена запроса — не «сетевая ошибка», пробрасываем
         } catch (e: Exception) {
             ServiceCall(0, "ошибка сети: ${e.message}", System.currentTimeMillis() - start)
         }

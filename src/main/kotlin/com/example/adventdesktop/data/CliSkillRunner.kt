@@ -4,6 +4,7 @@ import com.example.adventdesktop.domain.SkillRunner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import com.example.adventdesktop.domain.runCatchingCancellable
 
 /**
  * Реализация [SkillRunner] (День 20): выполняет наш локальный `visa-cli` отдельным JVM-процессом на текущем
@@ -36,7 +37,7 @@ class CliSkillRunner(private val accountId: String?) : SkillRunner {
             "-Dorg.apache.commons.logging.Log=org.apache.commons.logging.impl.NoOpLog",
             "-cp", classpath, MAIN_CLASS,
         ) + args
-        runCatching {
+        runCatchingCancellable {
             val proc = ProcessBuilder(cmd).redirectErrorStream(true).start()
             val out = proc.inputStream.bufferedReader(Charsets.UTF_8).readText()
             proc.waitFor()

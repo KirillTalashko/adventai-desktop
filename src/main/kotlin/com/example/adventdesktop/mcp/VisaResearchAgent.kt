@@ -6,6 +6,7 @@ import com.example.adventdesktop.domain.Role
 import io.ktor.client.HttpClient
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import com.example.adventdesktop.domain.runCatchingCancellable
 
 private const val MAX_ROUNDS = 3
 private const val QUERIES_PER_ROUND = 3
@@ -119,7 +120,7 @@ class VisaResearchAgent(
 
         // Поиск пуст (Tavily/DDG недоступны) → последний фоллбэк: Wikipedia, но всё равно синтезируем.
         if (evidence.isEmpty()) {
-            runCatching { http.wikipediaPolicy(enName) }.getOrNull()?.let {
+            runCatchingCancellable { http.wikipediaPolicy(enName) }.getOrNull()?.let {
                 evidence[it.url] = Evidence(it.url, it.title, it.snippet, it.official, it.raw)
             }
         }
@@ -140,12 +141,12 @@ class VisaResearchAgent(
     /** Один раунд: поиск по запросам + дотягивание текста топ-официальных страниц (dedup по URL). */
     private suspend fun runRound(queries: List<String>, evidence: MutableMap<String, Evidence>) {
         for (q in queries) {
-            val hits = runCatching { http.searchVisa(q, tavilyKey) }.getOrDefault(emptyList())
+            val hits = runCatchingCancellable { http.searchVisa(q, tavilyKey) }.getOrDefault(emptyList())
             for (h in hits) evidence.putIfAbsent(h.url, Evidence(h.url, h.title, h.snippet, h.official, h.raw))
         }
         val toFetch = evidence.values.filter { it.official && it.fullText == null }.take(PAGES_PER_ROUND)
         for (e in toFetch) {
-            val text = runCatching { http.fetchReadable(e.url, PAGE_CHARS) }.getOrNull()
+            val text = runCatchingCancellable { http.fetchReadable(e.url, PAGE_CHARS) }.getOrNull()
             if (text != null) evidence[e.url] = e.copy(fullText = text)
         }
     }
@@ -156,7 +157,7 @@ class VisaResearchAgent(
             "- ${if (it.official) "[офиц.] " else ""}${it.title} | ${it.url} | ${it.snippet.take(160)}"
         }
         val user = "Вопрос: $question\nСегодня: $today\n\nСОБРАНО:\n$map"
-        val raw = runCatching {
+        val raw = runCatchingCancellable {
             llm.complete(listOf(Message(Role.System, CONTROLLER_PROMPT), Message(Role.User, user))).text
         }.getOrNull() ?: return Decision(done = true)
         return parseDecision(raw)
@@ -180,7 +181,7 @@ class VisaResearchAgent(
             }
         }
         val user = "Запрос: $question\nСегодня: $today\nОфиц. портал (реестр): $portal\n\nСОБРАННЫЕ ИСТОЧНИКИ:\n$body"
-        return runCatching {
+        return runCatchingCancellable {
             llm.complete(listOf(Message(Role.System, SYNTH_PROMPT), Message(Role.User, user))).text
         }.getOrElse { e ->
             "Не удалось собрать сводку (LLM): ${e.message}\n\nИсточники:\n$body\n" +

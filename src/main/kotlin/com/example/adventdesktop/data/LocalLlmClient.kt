@@ -20,8 +20,10 @@ import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import com.example.adventdesktop.domain.runCatchingCancellable
 
 @Serializable
 private data class OllamaChatMessage(val role: String, val content: String = "")
@@ -132,7 +134,7 @@ class LocalLlmClient(
 
     /** Один POST `/api/chat` (stream=false) с обработкой ошибок — общий для [complete] и [runTuned] (DRY). */
     private suspend fun postChat(model: String, wire: List<OllamaChatMessage>, options: OllamaOptions?): OllamaChatResponse {
-        val resp: HttpResponse = runCatching {
+        val resp: HttpResponse = runCatchingCancellable {
             http.post("$baseUrl/api/chat") {
                 contentType(ContentType.Application.Json)
                 setBody(OllamaChatRequest(model, wire, stream = false, options = options))
@@ -173,6 +175,8 @@ suspend fun fetchOllamaModels(baseUrl: String = "http://localhost:11434"): List<
     return try {
         val resp: OllamaTagsResponse = http.get("$baseUrl/api/tags").body()
         resp.models.map { it.name }.filterNot { it.contains("embed", ignoreCase = true) }.sorted()
+    } catch (e: CancellationException) {
+        throw e   // отмену не глотаем (иначе выглядит как «Ollama недоступна»)
     } catch (e: Exception) {
         emptyList()
     } finally {

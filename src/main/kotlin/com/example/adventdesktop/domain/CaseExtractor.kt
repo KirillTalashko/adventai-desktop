@@ -10,7 +10,7 @@ class CaseExtractor(private val gateway: LlmGateway) {
 
     suspend fun update(recent: List<Message>, current: CaseFile): CaseFile {
         if (recent.none { it.role == Role.User }) return current
-        val raw = runCatching {
+        val raw = runCatchingCancellable {
             gateway.complete(listOf(Message(Role.System, PROMPT), Message(Role.User, buildInput(recent, current)))).text
         }.getOrNull().orEmpty()
         return current.merge(parse(raw))

@@ -14,7 +14,7 @@ class MemoryExtractor(private val gateway: LlmGateway) {
         longTerm: LongTermMemory
     ): MemoryUpdate {
         if (recent.none { it.role == Role.User }) return MemoryUpdate()
-        val text = runCatching {
+        val text = runCatchingCancellable {
             gateway.complete(
                 listOf(
                     Message(Role.System, SYSTEM_PROMPT),

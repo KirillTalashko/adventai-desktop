@@ -23,6 +23,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import java.io.File
+import com.example.adventdesktop.domain.runCatchingCancellable
 
 /**
  * MCP-клиент. Реализует доменный порт [ToolGateway] в двух режимах:
@@ -142,7 +143,7 @@ class McpClient(
     }
 
     override suspend fun callToolJson(name: String, argumentsJson: String): String {
-        val args: Map<String, Any?> = runCatching {
+        val args: Map<String, Any?> = runCatchingCancellable {
             Json.parseToJsonElement(argumentsJson).jsonObject.mapValues { (_, v) ->
                 (v as? JsonPrimitive)?.content ?: v.toString()
             }
@@ -152,8 +153,8 @@ class McpClient(
 
     override suspend fun close() {
         connected = false
-        runCatching { client?.close() }
-        runCatching { httpClient?.close() }
+        runCatchingCancellable { client?.close() }
+        runCatchingCancellable { httpClient?.close() }
         serverProcess?.destroy()
         client = null
         httpClient = null

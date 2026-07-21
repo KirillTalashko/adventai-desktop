@@ -41,7 +41,7 @@ class ContextAssembler(
         // Заполнение высокое: свернуть старый хвост (за пределами последних N) в УРОВНЕВУЮ память (P4).
         val oldCount = history.size - windowSize
         if (oldCount > derived.summarizedCount) {
-            val lv = runCatching { summarizeLeveled(history.take(oldCount)) }.getOrNull()
+            val lv = runCatchingCancellable { summarizeLeveled(history.take(oldCount)) }.getOrNull()
             if (lv != null && (lv.strategic.isNotEmpty() || lv.tactical.isNotEmpty()))
                 derived = derived.copy(summary = lv.tactical, summarizedCount = oldCount, facts = lv.strategic, factsCount = oldCount)
         }

@@ -4,6 +4,7 @@ import com.example.adventdesktop.domain.LlmGateway
 import com.example.adventdesktop.domain.LlmParams
 import com.example.adventdesktop.domain.Message
 import com.example.adventdesktop.domain.Role
+import com.example.adventdesktop.domain.runCatchingCancellable
 
 /** Способ второго этапа (День 23): без реранка, эвристика (cosine+лексика) или LLM-реранкер. */
 enum class RerankMode { OFF, HEURISTIC, LLM }
@@ -103,7 +104,7 @@ class LlmReranker(private val gateway: LlmGateway) {
         val sys = "Ты — реранкер поиска. Верни номера ТОЛЬКО релевантных вопросу фрагментов через запятую, " +
             "от самого релевантного к менее. Нерелевантные не включай. Ответ — только номера, без слов."
         val user = "Вопрос: $query\n\nФрагменты:\n$listing"
-        val resp = runCatching {
+        val resp = runCatchingCancellable {
             gateway.complete(listOf(Message(Role.System, sys), Message(Role.User, user)), params = LlmParams(temperature = 0.0))
         }.getOrNull() ?: return candidates
         val order = Regex("\\d+").findAll(resp.text).map { it.value.toInt() }.filter { it in 1..candidates.size }
@@ -129,7 +130,7 @@ class QueryRewriter(private val gateway: LlmGateway) {
     suspend fun rewrite(question: String): RewriteResult {
         val sys = "Перепиши вопрос пользователя в КОРОТКИЙ поисковый запрос по визовой базе знаний: ключевые " +
             "термины (страна, тип визы, суть), без вводных слов и без пояснений. Верни только запрос одной строкой."
-        val resp = runCatching {
+        val resp = runCatchingCancellable {
             gateway.complete(listOf(Message(Role.System, sys), Message(Role.User, question)), params = LlmParams(temperature = 0.0))
         }.getOrNull() ?: return RewriteResult(question, failed = true)
         val out = resp.text.lines().firstOrNull { it.isNotBlank() }?.trim()?.take(200)?.ifBlank { question } ?: question

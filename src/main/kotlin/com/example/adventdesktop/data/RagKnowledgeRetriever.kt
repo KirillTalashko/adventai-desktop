@@ -4,6 +4,7 @@ import com.example.adventdesktop.domain.rag.Embedder
 import com.example.adventdesktop.domain.rag.KnowledgeHit
 import com.example.adventdesktop.domain.rag.KnowledgeRetriever
 import com.example.adventdesktop.domain.rag.RagOptions
+import kotlinx.coroutines.CancellationException
 
 /**
  * Реализация порта [KnowledgeRetriever] (День 25): поиск во внутренней базе знаний через существующий
@@ -34,6 +35,8 @@ class RagKnowledgeRetriever(
                         text = s.chunk.text.trim(),
                     )
                 }
+        } catch (e: CancellationException) {
+            throw e       // отмену хода агента НЕ глотаем — пробрасываем (kotlin-coroutines-flows)
         } catch (_: Exception) {
             emptyList()   // при сбое (нет Ollama/индекса) RAG молчит — агент работает без базы, не падает
         } finally {

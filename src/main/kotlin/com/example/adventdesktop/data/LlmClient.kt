@@ -28,6 +28,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import com.example.adventdesktop.domain.runCatchingCancellable
 
 /** Куда и каким ключом ходить. */
 data class LlmConfig(val baseUrl: String, val apiKey: String, val model: String)
@@ -130,7 +131,7 @@ class LlmClient(private val config: LlmConfig) : LlmGatewayClient {
             // Модель попросила инструмент(ы): добавляем её ход + результаты вызовов и продолжаем цикл.
             wire.add(WireMessage(role = "assistant", content = msg.content, tool_calls = calls))
             for (c in calls) {
-                val result = runCatching { executeTool(c.function.name, c.function.arguments) }
+                val result = runCatchingCancellable { executeTool(c.function.name, c.function.arguments) }
                     .getOrElse { "Ошибка инструмента ${c.function.name}: ${it.message}" }
                 trace.add("${c.function.name}(${c.function.arguments})")
                 results.add(ToolResult(c.function.name, c.function.arguments, result))
@@ -163,7 +164,7 @@ class LlmClient(private val config: LlmConfig) : LlmGatewayClient {
         }
         if (!response.status.isSuccess()) {
             val raw = response.bodyAsText()
-            val message = runCatching { json.decodeFromString<ErrorEnvelope>(raw).error?.message }.getOrNull()
+            val message = runCatchingCancellable { json.decodeFromString<ErrorEnvelope>(raw).error?.message }.getOrNull()
                 ?: raw.take(300)
             throw IllegalStateException("Ошибка ${response.status.value}: $message")
         }

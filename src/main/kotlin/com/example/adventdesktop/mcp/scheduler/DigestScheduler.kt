@@ -5,6 +5,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import com.example.adventdesktop.domain.runCatchingCancellable
 
 /**
  * Фоновый планировщик дайджеста (День 18). Периодически (раз в [intervalMinutes]) обходит сохранённые
@@ -25,7 +26,7 @@ class DigestScheduler(
     /** Запустить фоновый цикл в переданном scope. Остановка — отменой возвращённого [Job]/scope. */
     fun start(scope: CoroutineScope): Job = scope.launch {
         while (isActive) {
-            runCatching { collectAll() }
+            runCatchingCancellable { collectAll() }
             delay(intervalMinutes.coerceAtLeast(1) * 60_000L)
         }
     }
@@ -33,7 +34,7 @@ class DigestScheduler(
     /** Один полный обход всех подписок: собрать и сохранить снимок по каждой стране. */
     suspend fun collectAll() {
         for (country in store.listCountries()) {
-            runCatching { collectOne(country) }
+            runCatchingCancellable { collectOne(country) }
         }
     }
 

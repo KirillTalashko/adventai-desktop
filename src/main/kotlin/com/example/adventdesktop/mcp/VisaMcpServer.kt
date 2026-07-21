@@ -56,6 +56,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 import java.io.File
 import java.time.LocalDate
+import com.example.adventdesktop.domain.runCatchingCancellable
 
 /**
  * MCP-сервер «Визовый специалист» (День 17) — самодостаточный умный сервис.
@@ -146,7 +147,7 @@ private const val EN_NAME_PROMPT =
 private suspend fun resolveEnglishName(llm: LlmClient?, input: String): String {
     RU_TO_EN[input.trim().lowercase()]?.let { return it }
     if (llm != null) {
-        val en = runCatching {
+        val en = runCatchingCancellable {
             llm.complete(listOf(Message(Role.System, EN_NAME_PROMPT), Message(Role.User, input.trim())))
                 .text.trim().lines().firstOrNull()?.trim()?.trim('.', '"', '«', '»', ' ')
         }.getOrNull()
@@ -158,7 +159,7 @@ private suspend fun resolveEnglishName(llm: LlmClient?, input: String): String {
 /** Портал подачи ЖИВЬЁМ: верх официального домена из поиска. null → живой поиск не дал офиц. источника. */
 private suspend fun resolveLivePortal(http: HttpClient, enName: String, tavilyKey: String?): String? {
     val q = "$enName official government visa application portal embassy consulate site"
-    val hits = runCatching { http.searchVisa(q, tavilyKey, limit = 6) }.getOrDefault(emptyList())
+    val hits = runCatchingCancellable { http.searchVisa(q, tavilyKey, limit = 6) }.getOrDefault(emptyList())
     return hits.firstOrNull { it.official }?.url
 }
 
@@ -184,7 +185,7 @@ private suspend fun summarizeText(llm: LlmClient?, text: String, focus: String):
         if (focus.isNotBlank()) append("Focus: ").append(focus).append("\n\n")
         append("ТЕКСТ:\n").append(text.take(8000))
     }
-    return runCatching {
+    return runCatchingCancellable {
         llm.complete(listOf(Message(Role.System, SUMMARIZE_PROMPT), Message(Role.User, user))).text.trim()
     }.getOrElse { text.take(1200) }
 }
@@ -230,14 +231,14 @@ fun main(): Unit = runBlocking {
     // --- День 19: каталог отчётов для save_report (под writable-путём сервиса; рядом с БД дайджеста) ---
     val reportsDir = System.getenv("REPORTS_DIR")?.trim()?.ifBlank { null }?.let { File(it) }
         ?: File(File(dbPath).absoluteFile.parentFile ?: appHomeDir(), "reports")
-    runCatching { reportsDir.mkdirs() }
+    runCatchingCancellable { reportsDir.mkdirs() }
     val store = DigestStore(dbPath)
     // Сбор сводки по одной стране — тем же внутренним research-агентом, что и get_visa_requirements.
     val collect: suspend (DigestCountry) -> Pair<String, String>? = collect@{ c ->
         val agent = researchAgent ?: return@collect null
         val enName = resolveEnglishName(llm, c.destination)
         val portal = resolvePortal(httpClient, enName, tavilyKey)
-        val summary = runCatching {
+        val summary = runCatchingCancellable {
             agent.research(c.destination, enName, c.citizenship, c.purpose, portal, LocalDate.now().toString())
         }.getOrNull()
         summary?.let { it to "" }
@@ -290,7 +291,7 @@ fun main(): Unit = runBlocking {
 
         // Полный цикл (поиск → парсинг → самокритика → дозапросы → синтез) — только с LLM.
         if (researchAgent != null) {
-            val researched = runCatching {
+            val researched = runCatchingCancellable {
                 researchAgent.research(destination, enName, citizenship, purpose, portal, today)
             }.getOrNull()
             if (researched != null) {
@@ -300,13 +301,13 @@ fun main(): Unit = runBlocking {
 
         // Фоллбэк (без ключа LLM или если исследование пусто): один поиск → сырой вывод; иначе Wikipedia.
         val query = "$enName visa requirements for ${citizenshipAdj(citizenship)} citizens ${purposeEn(purpose)} official site"
-        val used = runCatching { httpClient.searchVisa(query, tavilyKey) }.getOrDefault(emptyList()).take(5)
+        val used = runCatchingCancellable { httpClient.searchVisa(query, tavilyKey) }.getOrDefault(emptyList()).take(5)
         val grounding: String = if (used.isNotEmpty()) {
             used.joinToString("\n\n") {
                 "• ${it.title}${if (it.official) " [офиц.]" else ""}\n  ${it.snippet}\n  URL: ${it.url}"
             }
         } else {
-            val wiki = runCatching { httpClient.fetchPolicyText(enName) }.getOrNull()
+            val wiki = runCatchingCancellable { httpClient.fetchPolicyText(enName) }.getOrNull()
                 ?: return@addTool CallToolResult(content = listOf(TextContent(
                     "Не удалось найти источники по «$destination» на сегодня. Официальный портал: $portal\n" +
                         "⚠️ Проверьте требования на официальном сайте."
@@ -349,7 +350,7 @@ fun main(): Unit = runBlocking {
             return@addTool CallToolResult(content = listOf(TextContent("Параметр «destination» обязателен.")))
         }
         val country = store.addCountry(destination, citizenship, purpose)
-        runCatching { scheduler.collectOne(country) }   // первый снимок сразу (если есть LLM-агент)
+        runCatchingCancellable { scheduler.collectOne(country) }   // первый снимок сразу (если есть LLM-агент)
         val count = store.snapshotCount(country.id)
         CallToolResult(content = listOf(TextContent(
             "Подписка добавлена: $destination ($citizenship, $purpose). Снимков в истории: $count. " +
@@ -444,7 +445,7 @@ fun main(): Unit = runBlocking {
     ) { request ->
         val query = request.arguments?.get("query")?.jsonPrimitive?.content?.trim().orEmpty()
         if (query.isBlank()) return@addTool CallToolResult(content = listOf(TextContent("Параметр «query» обязателен.")))
-        val hits = runCatching { httpClient.searchVisa(query, tavilyKey, limit = 6) }.getOrDefault(emptyList())
+        val hits = runCatchingCancellable { httpClient.searchVisa(query, tavilyKey, limit = 6) }.getOrDefault(emptyList())
         val text = if (hits.isEmpty()) "По запросу «$query» источников не найдено."
         else hits.joinToString("\n\n") {
             "• ${it.title}${if (it.official) " [офиц.]" else ""}\n  URL: ${it.url}\n  ${it.snippet.take(300)}"
@@ -492,7 +493,7 @@ fun main(): Unit = runBlocking {
             return@addTool CallToolResult(content = listOf(TextContent("Параметры «filename» и «content» обязательны.")))
         }
         val file = File(reportsDir, safeReportName(filename))
-        val saved = runCatching { file.writeText(content); file.absolutePath }.getOrElse {
+        val saved = runCatchingCancellable { file.writeText(content); file.absolutePath }.getOrElse {
             return@addTool CallToolResult(content = listOf(TextContent("Не удалось сохранить отчёт: ${it.message}")))
         }
         CallToolResult(content = listOf(TextContent(

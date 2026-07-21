@@ -13,7 +13,7 @@ class OfferAgent(private val gateway: LlmGateway) {
 
     suspend fun check(task: String, step: String): Offer? {
         if (step.isBlank()) return null
-        val raw = runCatching {
+        val raw = runCatchingCancellable {
             gateway.complete(
                 listOf(
                     Message(Role.System, SYSTEM_PROMPT),
