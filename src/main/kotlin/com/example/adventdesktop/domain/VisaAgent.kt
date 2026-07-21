@@ -44,7 +44,7 @@ class VisaAgent(
         profile: UserProfile?,
         invariants: List<Invariant>,
         contextFill: Float
-    ): Result<AgentTurn> = runCatching {
+    ): Result<AgentTurn> = runCatchingCancellable {
         val assembled = assembler.assemble(conversation, working, longTerm, profile, invariants, contextFill)
         var response = gateway.complete(assembled.messages)
         // Двойная защита (День 14): пост-проверка стража; при нарушении — перегенерация в обоснованный отказ.

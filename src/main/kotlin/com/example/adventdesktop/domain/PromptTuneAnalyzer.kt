@@ -12,7 +12,7 @@ data class PromptProposal(val role: String, val add: String, val why: String)
 class PromptTuneAnalyzer(private val gateway: LlmGateway) {
 
     suspend fun analyze(collectData: String): List<PromptProposal> {
-        val raw = runCatching {
+        val raw = runCatchingCancellable {
             gateway.complete(listOf(Message(Role.System, PROMPT), Message(Role.User, collectData))).text
         }.getOrNull().orEmpty()
         return parse(raw)

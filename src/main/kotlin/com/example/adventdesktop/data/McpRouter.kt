@@ -6,6 +6,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
+import com.example.adventdesktop.domain.runCatchingCancellable
 
 /**
  * Мультисервер-маршрутизатор MCP (День 20, оркестрация: «несколько MCP-серверов»). Реализует тот же порт
@@ -23,7 +24,7 @@ class McpRouter(private val servers: List<Pair<String, ToolGateway>>) : ToolGate
     override suspend fun connect() {
         // ПАРАЛЛЕЛЬНО + таймаут на сервер: общее время ≈ самого медленного, а не сумма; недоступный пропускается.
         coroutineScope {
-            servers.map { (_, gw) -> async { runCatching { withTimeoutOrNull(CONNECT_TIMEOUT_MS) { gw.connect() } } } }.awaitAll()
+            servers.map { (_, gw) -> async { runCatchingCancellable { withTimeoutOrNull(CONNECT_TIMEOUT_MS) { gw.connect() } } } }.awaitAll()
         }
     }
 
@@ -31,7 +32,7 @@ class McpRouter(private val servers: List<Pair<String, ToolGateway>>) : ToolGate
         owner.clear()
         // Опрашиваем серверы параллельно, собираем по порядку (карта имя→сервер строится без гонки).
         val jobs = servers.map { (label, gw) ->
-            Triple(label, gw, async { runCatching { withTimeoutOrNull(LIST_TIMEOUT_MS) { gw.listTools() } }.getOrNull().orEmpty() })
+            Triple(label, gw, async { runCatchingCancellable { withTimeoutOrNull(LIST_TIMEOUT_MS) { gw.listTools() } }.getOrNull().orEmpty() })
         }
         val all = mutableListOf<Tool>()
         for ((label, gw, job) in jobs) {
@@ -51,7 +52,7 @@ class McpRouter(private val servers: List<Pair<String, ToolGateway>>) : ToolGate
         route(name).callToolJson(realName(name), argumentsJson)
 
     override suspend fun close() {
-        servers.forEach { (_, gw) -> runCatching { gw.close() } }
+        servers.forEach { (_, gw) -> runCatchingCancellable { gw.close() } }
     }
 
     private fun route(name: String): ToolGateway =

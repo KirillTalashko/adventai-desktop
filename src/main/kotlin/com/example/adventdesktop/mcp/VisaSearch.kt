@@ -14,6 +14,7 @@ import kotlinx.serialization.Serializable
 import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
+import com.example.adventdesktop.domain.runCatchingCancellable
 
 /** Один результат поиска. [official] = домен похож на официальный/правительственный; [raw] = полный текст, если есть. */
 data class SearchHit(
@@ -92,7 +93,7 @@ private val SCRIPT_STYLE = Regex(
  * пуста, под Cloudflare/CAPTCHA или похожа на JS-оболочку — тогда вызывающий просто её пропустит.
  */
 suspend fun HttpClient.fetchReadable(url: String, maxChars: Int = 4000): String? {
-    val html = runCatching {
+    val html = runCatchingCancellable {
         get(url) {
             header(
                 "User-Agent",
@@ -153,10 +154,10 @@ suspend fun HttpClient.tavilySearch(apiKey: String, query: String, limit: Int = 
 /** Единая точка поиска: Tavily (если есть ключ; при пустом ответе — DDG), иначе DuckDuckGo. */
 suspend fun HttpClient.searchVisa(query: String, tavilyKey: String?, limit: Int = 6): List<SearchHit> {
     if (!tavilyKey.isNullOrBlank()) {
-        val t = runCatching { tavilySearch(tavilyKey, query, limit) }.getOrDefault(emptyList())
+        val t = runCatchingCancellable { tavilySearch(tavilyKey, query, limit) }.getOrDefault(emptyList())
         if (t.isNotEmpty()) return t
     }
-    return runCatching { duckSearch(query, limit) }.getOrDefault(emptyList())
+    return runCatchingCancellable { duckSearch(query, limit) }.getOrDefault(emptyList())
 }
 
 // ----- Аварийный источник: Wikipedia REST (как SearchHit, official=false) -----

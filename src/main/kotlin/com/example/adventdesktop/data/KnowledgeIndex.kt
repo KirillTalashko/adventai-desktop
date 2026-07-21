@@ -1,6 +1,7 @@
 package com.example.adventdesktop.data
 
 import com.example.adventdesktop.domain.LlmGateway
+import com.example.adventdesktop.domain.runCatchingCancellable
 import com.example.adventdesktop.domain.rag.CitationCheck
 import com.example.adventdesktop.domain.rag.ContextualChunker
 import com.example.adventdesktop.domain.rag.DocumentIndexer
@@ -25,6 +26,10 @@ import com.example.adventdesktop.domain.rag.RetrievalTrace
 import com.example.adventdesktop.domain.rag.RewriteOutcome
 import com.example.adventdesktop.domain.rag.Scored
 import com.example.adventdesktop.domain.rag.StructuralChunker
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
 import java.io.File
 
 /**
@@ -63,17 +68,28 @@ class KnowledgeIndex(ragDir: File) {
     /** Документы из папки знаний (README/статьи/код/PDF → текст). */
     fun documents(): List<RagDocument> = DocumentLoader.loadDir(knowledgeDir)
 
-    /** Построить индекс ВСЕХ трёх стратегий одним эмбеддером и сохранить. Вернуть их статистику для сравнения. */
-    suspend fun rebuild(embedder: Embedder, onProgress: (String, Int, Int) -> Unit = { _, _, _ -> }): Comparison {
+    /** Событие построения индекса (Flow): прогресс эмбеддинга по стратегиям и финальное сравнение. */
+    sealed interface RebuildEvent {
+        data class Progress(val strategy: String, val done: Int, val total: Int) : RebuildEvent
+        data class Completed(val comparison: Comparison) : RebuildEvent
+    }
+
+    /**
+     * Построить индекс ВСЕХ трёх стратегий одним эмбеддером, сохранить и **стримить прогресс** холодным
+     * [Flow]: серия [RebuildEvent.Progress] по мере эмбеддинга, в конце — [RebuildEvent.Completed] со
+     * сравнением. Холодный: работа стартует только на `collect`; отмена коллектора отменяет индексацию
+     * (структурная конкурентность). `trySend` для прогресса — потерять тик прогресса не страшно.
+     */
+    fun rebuild(embedder: Embedder): Flow<RebuildEvent> = channelFlow {
         val docs = documents()
         val indexer = DocumentIndexer(embedder)
-        val fixed = indexer.build(docs, FixedSizeChunker()) { d, t -> onProgress("fixed", d, t) }
+        val fixed = indexer.build(docs, FixedSizeChunker()) { done, total -> trySend(RebuildEvent.Progress("fixed", done, total)) }
         store.save(fixed.stats, fixed.chunks)
-        val structural = indexer.build(docs, StructuralChunker()) { d, t -> onProgress("structural", d, t) }
+        val structural = indexer.build(docs, StructuralChunker()) { done, total -> trySend(RebuildEvent.Progress("structural", done, total)) }
         store.save(structural.stats, structural.chunks)
-        val contextual = indexer.build(docs, ContextualChunker()) { d, t -> onProgress("contextual", d, t) }
+        val contextual = indexer.build(docs, ContextualChunker()) { done, total -> trySend(RebuildEvent.Progress("contextual", done, total)) }
         store.save(contextual.stats, contextual.chunks)
-        return Comparison(docs.size, fixed.stats, structural.stats, contextual.stats)
+        send(RebuildEvent.Completed(Comparison(docs.size, fixed.stats, structural.stats, contextual.stats)))
     }
 
     fun stats(strategy: String): IndexStats? = store.stats(strategy)
@@ -92,8 +108,8 @@ class KnowledgeIndex(ragDir: File) {
         val rw = if (options.rewrite && gateway != null) QueryRewriter(gateway).rewrite(question) else null
         val used = rw?.query ?: question
         val outcome = when {
-            !options.rewrite || gateway == null -> RewriteOutcome.OFF
-            rw!!.failed -> RewriteOutcome.FAILED
+            rw == null -> RewriteOutcome.OFF            // rw == null ⇔ (!options.rewrite || gateway == null)
+            rw.failed -> RewriteOutcome.FAILED
             used != question -> RewriteOutcome.REWRITTEN
             else -> RewriteOutcome.UNCHANGED
         }
@@ -153,12 +169,13 @@ class KnowledgeIndex(ragDir: File) {
         val judge = RagFaithfulnessJudge(gateway)
         val qs = goldQuestions()
         return qs.mapIndexed { i, q ->
+            currentCoroutineContext().ensureActive()   // длинный прогон — уважаем отмену между вопросами
             onProgress(i + 1, qs.size)
-            val ans = runCatching { answer(gateway, embedder, q.question, useRag = true, options) }
+            val ans = runCatchingCancellable { answer(gateway, embedder, q.question, useRag = true, options) }
                 .getOrElse { RagAnswer("С RAG", "(ошибка: ${it.message})", emptyList(), null, 0) }
             // Faithfulness сверяем против ИСТОЧНИКОВ ответа (полные чанки), а не одной цитаты — иначе занижаем.
             val faithful = if (ans.abstained || ans.sources.isEmpty()) null
-            else runCatching { judge.faithful(ans.text, ans.sources.map { it.text }) }.getOrNull()
+            else runCatchingCancellable { judge.faithful(ans.text, ans.sources.map { it.text }) }.getOrNull()
             CitationCheck(q, ans, faithful)
         }
     }
@@ -174,10 +191,11 @@ class KnowledgeIndex(ragDir: File) {
     ): List<GoldAnswer> {
         val qs = goldQuestions()
         return qs.mapIndexed { i, q ->
+            currentCoroutineContext().ensureActive()   // длинный прогон — уважаем отмену между вопросами
             onProgress(i + 1, qs.size)
-            val rag = runCatching { answer(gateway, embedder, q.question, useRag = true, options) }
+            val rag = runCatchingCancellable { answer(gateway, embedder, q.question, useRag = true, options) }
                 .getOrElse { RagAnswer("С RAG", "(ошибка: ${it.message})", emptyList(), null, 0) }
-            val plain = runCatching { answer(gateway, embedder, q.question, useRag = false, options) }
+            val plain = runCatchingCancellable { answer(gateway, embedder, q.question, useRag = false, options) }
                 .getOrElse { RagAnswer("Без RAG", "(ошибка: ${it.message})", emptyList(), null, 0) }
             GoldAnswer(q, rag, plain)
         }
@@ -195,6 +213,7 @@ class KnowledgeIndex(ragDir: File) {
     ): List<GoldRetrieval> {
         val qs = goldQuestions()
         return qs.mapIndexed { i, q ->
+            currentCoroutineContext().ensureActive()   // длинный прогон — уважаем отмену между вопросами
             onProgress(i + 1, qs.size)
             // baseline = «как в Дне 22»: структурная стратегия, сырой top-K по cosine, без реранка/фильтра.
             val base = search(embedder, BASELINE_STRATEGY, q.question, options.topK).map { it.chunk.meta.source }.distinct()

@@ -7,6 +7,7 @@ import com.example.adventdesktop.data.LocalLlmClient
 import com.example.adventdesktop.domain.LlmParams
 import com.example.adventdesktop.domain.Message
 import com.example.adventdesktop.domain.Role
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -45,6 +46,8 @@ fun main(args: Array<String>) {
                     val u = resp.usage
                     println("💬 ${resp.text}")
                     println("⏱ $ms мс · токены: вход ${u?.prompt ?: 0}, выход ${u?.completion ?: 0}, всего ${u?.total ?: 0}")
+                } catch (e: CancellationException) {
+                    throw e   // Ctrl+C / отмена — прекращаем прогон, а не «ошибка запроса»
                 } catch (e: Exception) {
                     println("⚠️ Ошибка: ${e.message}")
                 }

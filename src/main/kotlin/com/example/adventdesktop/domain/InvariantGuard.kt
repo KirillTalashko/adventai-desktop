@@ -10,7 +10,7 @@ class InvariantGuard(private val gateway: LlmGateway) {
     suspend fun check(answer: String, invariants: List<Invariant>): String? {
         val active = invariants.filter { it.active }
         if (active.isEmpty() || answer.isBlank()) return null
-        val raw = runCatching {
+        val raw = runCatchingCancellable {
             gateway.complete(
                 listOf(
                     Message(Role.System, SYSTEM_PROMPT),

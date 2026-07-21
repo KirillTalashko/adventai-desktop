@@ -76,12 +76,15 @@ import com.example.adventdesktop.domain.VISA_SYSTEM_PROMPT
 import com.example.adventdesktop.domain.VisaAgent
 import com.example.adventdesktop.domain.WorkingMemory
 import com.example.adventdesktop.domain.transitionTo
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import com.example.adventdesktop.domain.runCatchingCancellable
 
 private const val DEFAULT_TITLE = "Новая сессия"
 private const val TITLE_MAX = 42
@@ -507,7 +510,7 @@ class ChatState(
                 "и бьются ли даты с поездкой. Кратко скажи, что приложено и чего не хватает по визе; и ВАЖНО — " +
                 "если документы похоже на РАЗНЫХ людей или данные противоречат, ЯВНО предупреди (⚠️) и не принимай " +
                 "пакет как валидный. Не выдумывай — опирайся на извлечённый текст; если текст не извлёкся (скан), скажи это."
-            val run = runCatching { engine.run(SkillDocs.load("visa-cli"), conv.messages, goal) }.getOrNull() ?: return@launch
+            val run = runCatchingCancellable { engine.run(SkillDocs.load("visa-cli"), conv.messages, goal) }.getOrNull() ?: return@launch
             val trace = run.calls.joinToString("\n") { "🔧 ${it.command}" }
             val text = "🧰 Навык docs (Skill + CLI)\n" + (if (trace.isNotBlank()) "$trace\n\n" else "") + run.reply
             val base = current ?: return@launch
@@ -593,15 +596,18 @@ class ChatState(
                 config.mcpEnabled, config.extraMcpEnabled,
             )
             mcpGateway = gateway
-            runCatching {
-                // Таймаут: первый запуск стороннего npx-сервера может качать пакет — но окно не должно висеть вечно.
-                withTimeoutOrNull(40_000) {
-                    gateway.connect()
-                    gateway.listTools()
-                } ?: error("MCP-сервер не ответил за 40 с (недоступен? первый запуск npx мог скачивать пакет — повторите).")
-            }.onSuccess { mcpTools = it }
-                .onFailure { mcpError = it.message ?: "Не удалось подключиться к MCP" }
-            mcpConnecting = false
+            try {
+                runCatchingCancellable {
+                    // Таймаут: первый запуск стороннего npx-сервера может качать пакет — но окно не должно висеть вечно.
+                    withTimeoutOrNull(40_000) {
+                        gateway.connect()
+                        gateway.listTools()
+                    } ?: error("MCP-сервер не ответил за 40 с (недоступен? первый запуск npx мог скачивать пакет — повторите).")
+                }.onSuccess { mcpTools = it }
+                    .onFailure { mcpError = it.message ?: "Не удалось подключиться к MCP" }
+            } finally {
+                mcpConnecting = false   // всегда: иначе окно «Инструменты MCP» зависнет в состоянии подключения
+            }
         }
     }
 
@@ -614,10 +620,13 @@ class ChatState(
         mcpCheckResult = null
         scope.launch {
             val t0 = System.currentTimeMillis()
-            runCatching { gateway.listTools() }
-                .onSuccess { mcpCheckResult = "✓ сервер ответил за ${System.currentTimeMillis() - t0} мс · инструментов: ${it.size}" }
-                .onFailure { mcpCheckResult = "✗ нет ответа: ${it.message}" }
-            mcpChecking = false
+            try {
+                runCatchingCancellable { gateway.listTools() }
+                    .onSuccess { mcpCheckResult = "✓ сервер ответил за ${System.currentTimeMillis() - t0} мс · инструментов: ${it.size}" }
+                    .onFailure { mcpCheckResult = "✗ нет ответа: ${it.message}" }
+            } finally {
+                mcpChecking = false   // всегда: иначе при отмене/сбое спиннер залипнет, а гейт не пустит повтор
+            }
         }
     }
 
@@ -630,15 +639,18 @@ class ChatState(
         mcpVisaLoading = true
         mcpVisaResult = null
         scope.launch {
-            runCatching {
-                gateway.callTool(
-                    "get_visa_requirements",
-                    mapOf("destination" to destination, "citizenship" to citizenship, "purpose" to "туризм"),
-                )
+            try {
+                runCatchingCancellable {
+                    gateway.callTool(
+                        "get_visa_requirements",
+                        mapOf("destination" to destination, "citizenship" to citizenship, "purpose" to "туризм"),
+                    )
+                }
+                    .onSuccess { mcpVisaResult = it }
+                    .onFailure { mcpVisaResult = "ошибка: ${it.message}" }
+            } finally {
+                mcpVisaLoading = false   // всегда: иначе при отмене/сбое спиннер залипнет, а гейт не пустит повтор
             }
-                .onSuccess { mcpVisaResult = it }
-                .onFailure { mcpVisaResult = "ошибка: ${it.message}" }
-            mcpVisaLoading = false
         }
     }
 
@@ -654,15 +666,18 @@ class ChatState(
         scope.launch {
             val t0 = System.currentTimeMillis()
             val sb = StringBuilder()
-            runCatching { gateway.callTool("echo", mapOf("message" to "ping от приложения")) }
-                .onSuccess { sb.append("🔧 echo(\"ping от приложения\") → ").append(it.replace("\n", " ").take(120)) }
-                .onFailure { sb.append("🔧 echo → ✗ ${it.message}") }
-            sb.append('\n')
-            runCatching { gateway.callTool("get-sum", mapOf("a" to 2, "b" to 3)) }
-                .onSuccess { sb.append("🔧 get-sum(2, 3) → ").append(it.replace("\n", " ").take(120)) }
-                .onFailure { sb.append("🔧 get-sum → ✗ ${it.message}") }
-            mcpExtraTestResult = "✓ за ${System.currentTimeMillis() - t0} мс:\n$sb"
-            mcpExtraTesting = false
+            try {
+                runCatchingCancellable { gateway.callTool("echo", mapOf("message" to "ping от приложения")) }
+                    .onSuccess { sb.append("🔧 echo(\"ping от приложения\") → ").append(it.replace("\n", " ").take(120)) }
+                    .onFailure { sb.append("🔧 echo → ✗ ${it.message}") }
+                sb.append('\n')
+                runCatchingCancellable { gateway.callTool("get-sum", mapOf("a" to 2, "b" to 3)) }
+                    .onSuccess { sb.append("🔧 get-sum(2, 3) → ").append(it.replace("\n", " ").take(120)) }
+                    .onFailure { sb.append("🔧 get-sum → ✗ ${it.message}") }
+                mcpExtraTestResult = "✓ за ${System.currentTimeMillis() - t0} мс:\n$sb"
+            } finally {
+                mcpExtraTesting = false   // всегда: иначе при отмене/сбое гейт не пустит повторный прогон
+            }
         }
     }
 
@@ -681,20 +696,23 @@ class ChatState(
         scope.launch {
             val steps = mutableListOf<PipelineStep>()
             fun push(s: PipelineStep) { steps.add(s); mcpPipelineSteps = steps.toList() }
-            // Шаг 1 — ПОЛУЧИТЬ данные.
-            val r1 = runCatching { gateway.callTool("visa_search", mapOf("query" to query)) }
-                .getOrElse { "ошибка: ${it.message}" }
-            push(PipelineStep("visa_search", "1. visa_search — получить данные", r1, !r1.startsWith("ошибка")))
-            // Шаг 2 — ОБРАБОТАТЬ вывод шага 1.
-            val r2 = runCatching { gateway.callTool("visa_summarize", mapOf("text" to r1, "focus" to query)) }
-                .getOrElse { "ошибка: ${it.message}" }
-            push(PipelineStep("visa_summarize", "2. visa_summarize — обработать вывод шага 1", r2, !r2.startsWith("ошибка")))
-            // Шаг 3 — СОХРАНИТЬ вывод шага 2.
-            val fname = "visa-report-${System.currentTimeMillis()}.md"
-            val r3 = runCatching { gateway.callTool("save_report", mapOf("filename" to fname, "content" to r2)) }
-                .getOrElse { "ошибка: ${it.message}" }
-            push(PipelineStep("save_report", "3. save_report — сохранить вывод шага 2", r3, !r3.startsWith("ошибка")))
-            mcpPipelineRunning = false
+            try {
+                // Шаг 1 — ПОЛУЧИТЬ данные.
+                val r1 = runCatchingCancellable { gateway.callTool("visa_search", mapOf("query" to query)) }
+                    .getOrElse { "ошибка: ${it.message}" }
+                push(PipelineStep("visa_search", "1. visa_search — получить данные", r1, !r1.startsWith("ошибка")))
+                // Шаг 2 — ОБРАБОТАТЬ вывод шага 1.
+                val r2 = runCatchingCancellable { gateway.callTool("visa_summarize", mapOf("text" to r1, "focus" to query)) }
+                    .getOrElse { "ошибка: ${it.message}" }
+                push(PipelineStep("visa_summarize", "2. visa_summarize — обработать вывод шага 1", r2, !r2.startsWith("ошибка")))
+                // Шаг 3 — СОХРАНИТЬ вывод шага 2.
+                val fname = "visa-report-${System.currentTimeMillis()}.md"
+                val r3 = runCatchingCancellable { gateway.callTool("save_report", mapOf("filename" to fname, "content" to r2)) }
+                    .getOrElse { "ошибка: ${it.message}" }
+                push(PipelineStep("save_report", "3. save_report — сохранить вывод шага 2", r3, !r3.startsWith("ошибка")))
+            } finally {
+                mcpPipelineRunning = false   // всегда: иначе кнопка «прогнать» останется мёртвой до конца сессии
+            }
         }
     }
 
@@ -712,22 +730,25 @@ class ChatState(
         mcpPipelineSteps = emptyList()
         scope.launch {
             val steps = mutableListOf<PipelineStep>()
-            runCatching {
-                val pipelineTools = gateway.listTools().filter { it.name in PIPELINE_TOOL_NAMES }
-                val messages = listOf(
-                    Message(Role.System, PIPELINE_AGENT_PROMPT),
-                    Message(Role.User, "Цель: по теме «$query» собери актуальную выжимку и сохрани её в файл-отчёт."),
-                )
-                val resp = llm.complete(messages, pipelineTools) { name, args -> gateway.callToolJson(name, args) }
-                resp.toolResults.forEachIndexed { i, tr ->
-                    steps.add(PipelineStep(tr.name, "${i + 1}. 🔧 ${tr.name}(${tr.args.take(80)})", tr.result, true))
+            try {
+                runCatchingCancellable {
+                    val pipelineTools = gateway.listTools().filter { it.name in PIPELINE_TOOL_NAMES }
+                    val messages = listOf(
+                        Message(Role.System, PIPELINE_AGENT_PROMPT),
+                        Message(Role.User, "Цель: по теме «$query» собери актуальную выжимку и сохрани её в файл-отчёт."),
+                    )
+                    val resp = llm.complete(messages, pipelineTools) { name, args -> gateway.callToolJson(name, args) }
+                    resp.toolResults.forEachIndexed { i, tr ->
+                        steps.add(PipelineStep(tr.name, "${i + 1}. 🔧 ${tr.name}(${tr.args.take(80)})", tr.result, true))
+                    }
+                    steps.add(PipelineStep("(итог)", "Ответ агента", resp.text, true))
+                    mcpPipelineSteps = steps.toList()
+                }.onFailure {
+                    mcpPipelineSteps = listOf(PipelineStep("(ошибка)", "Сбой пайплайна", it.message ?: "неизвестно", false))
                 }
-                steps.add(PipelineStep("(итог)", "Ответ агента", resp.text, true))
-                mcpPipelineSteps = steps.toList()
-            }.onFailure {
-                mcpPipelineSteps = listOf(PipelineStep("(ошибка)", "Сбой пайплайна", it.message ?: "неизвестно", false))
+            } finally {
+                mcpPipelineRunning = false   // общий флаг с runPipelineDeterministic — сбрасываем так же надёжно
             }
-            mcpPipelineRunning = false
         }
     }
 
@@ -741,7 +762,7 @@ class ChatState(
         mcpExtraTestResult = null
         val gateway = mcpGateway
         mcpGateway = null
-        scope.launch { runCatching { gateway?.close() } }
+        scope.launch { runCatchingCancellable { gateway?.close() } }
     }
 
     // --- День 21: индексация базы знаний (RAG) — пайплайн chunking → эмбеддинги → SQLite-индекс ---
@@ -802,19 +823,29 @@ class ChatState(
             val k = knowledge()
             ragDocCount = k.documents().size
             val emb = newEmbedder()
-            runCatching {
-                k.rebuild(emb) { strat, done, total -> ragProgress = "$strat: $done/$total чанков" }
-            }.onSuccess {
-                ragComparison = RagComparisonView(it.docCount, it.fixed.toView(), it.structural.toView(), it.contextual.toView())
+            try {
+                k.rebuild(emb).collect { event ->
+                    when (event) {
+                        is KnowledgeIndex.RebuildEvent.Progress ->
+                            ragProgress = "${event.strategy}: ${event.done}/${event.total} чанков"
+                        is KnowledgeIndex.RebuildEvent.Completed -> {
+                            val c = event.comparison
+                            ragComparison = RagComparisonView(c.docCount, c.fixed.toView(), c.structural.toView(), c.contextual.toView())
+                            ragProgress = ""
+                            ragNote = "Индекс построен (эмбеддер ${emb.id}) для $ragDocCount документов."
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e   // не глотаем отмену — пробрасываем для корректного завершения scope
+            } catch (e: Exception) {
                 ragProgress = ""
-                ragNote = "Индекс построен (эмбеддер ${emb.id}) для $ragDocCount документов."
-            }.onFailure {
-                ragProgress = ""
-                ragNote = "Ошибка: ${it.message}" +
+                ragNote = "Ошибка: ${e.message}" +
                     if (ragUseOllama) "\nСовет: запусти Ollama (`ollama serve` + `ollama pull nomic-embed-text`) или выключи Ollama выше — сработает офлайн-фолбэк." else ""
+            } finally {
+                (emb as? OllamaEmbedder)?.close()
+                ragBuilding = false
             }
-            (emb as? OllamaEmbedder)?.close()
-            ragBuilding = false
         }
     }
 
@@ -883,7 +914,7 @@ class ChatState(
             val acc = mutableListOf<LocalLlmResult>()
             for (s in samples) {
                 val start = System.currentTimeMillis()
-                val r = runCatching {
+                val r = runCatchingCancellable {
                     client.complete(
                         listOf(Message(Role.System, LOCAL_LLM_SYSTEM), Message(Role.User, s.prompt)),
                         params = LlmParams(temperature = 0.3),
@@ -898,7 +929,7 @@ class ChatState(
                 }
                 localLlmResults = acc.toList()   // прогрессивно показываем по мере ответов
             }
-            runCatching { client.close() }
+            runCatchingCancellable { client.close() }
             if (acc.isNotEmpty() && acc.all { it.error }) {
                 localLlmNote = "Локальная модель недоступна. Запусти `ollama serve` и `ollama pull $model`."
             }
@@ -937,7 +968,7 @@ class ChatState(
         optAfter = null
         scope.launch {
             val client = LocalLlmClient()
-            runCatching {
+            runCatchingCancellable {
                 optBefore = client.runTuned(task, LocalTuning(model = optModel))   // baseline: общий промпт + дефолты
                 optAfter = client.runTuned(                                        // tuned: задачный шаблон + ручки
                     task,
@@ -949,7 +980,7 @@ class ChatState(
                     ),
                 )
             }.onFailure { localLlmNote = "Ошибка оптимизации: ${it.message}" }
-            runCatching { client.close() }
+            runCatchingCancellable { client.close() }
             optRunning = false
         }
     }
@@ -985,13 +1016,13 @@ class ChatState(
         scope.launch {
             val c = LlmServiceClient(serviceUrl, serviceToken.ifBlank { null })
             for (s in LOCAL_LLM_SAMPLES) {
-                val line = runCatching {
+                val line = runCatchingCancellable {
                     val r = c.chat(s.prompt)
                     "[${s.level}] ${r.status} · ${r.body.take(280)} (${r.ms} мс)" + auth401(r.status)
                 }.getOrElse { "[${s.level}] ошибка: ${it.message}" }
                 serviceLog = serviceLog + line
             }
-            runCatching { c.close() }
+            runCatchingCancellable { c.close() }
             serviceRunning = false
         }
     }
@@ -1002,12 +1033,12 @@ class ChatState(
         serviceRunning = true
         scope.launch {
             val c = LlmServiceClient(serviceUrl, serviceToken.ifBlank { null })
-            val codes = runCatching {
+            val codes = runCatchingCancellable {
                 (1..6).map { i -> async { c.chat("Документ №$i на визу, одной строкой.").status } }.awaitAll()
             }.getOrElse { emptyList() }
             val tally = codes.groupingBy { it }.eachCount()
             serviceLog = serviceLog + "Нагрузка ×6 → коды: $tally  (200 ответ · 429 rate-limit · 503 занят)"
-            runCatching { c.close() }
+            runCatchingCancellable { c.close() }
             serviceRunning = false
         }
     }
@@ -1017,9 +1048,9 @@ class ChatState(
         serviceRunning = true
         scope.launch {
             val c = LlmServiceClient(serviceUrl, serviceToken.ifBlank { null })
-            val line = runCatching { block(c) }.getOrElse { "ошибка: ${it.message}" }
+            val line = runCatchingCancellable { block(c) }.getOrElse { "ошибка: ${it.message}" }
             serviceLog = serviceLog + line
-            runCatching { c.close() }
+            runCatchingCancellable { c.close() }
             serviceRunning = false
         }
     }
@@ -1073,7 +1104,7 @@ class ChatState(
         ragTrace = null
         scope.launch {
             val emb = newEmbedder()
-            runCatching {
+            runCatchingCancellable {
                 val k = knowledge()
                 ragAnswerPlain = k.answer(gw, emb, q, useRag = false)          // без RAG — из общих знаний модели
                 val (ans, trace) = k.answerWithTrace(gw, emb, q, ragOptions())  // с RAG — улучшенный пайплайн
@@ -1118,15 +1149,15 @@ class ChatState(
             val emb = newEmbedder()
             val localGw = LocalLlmClient(model = ragLocalModel)
             val cloudGw = resolveLlmConfig(Models.byId("deepseek-chat"), config)?.let { LlmClient(it) }
-            runCatching {
+            runCatchingCancellable {
                 val k = knowledge()
                 val after = k.retrieveLocal(emb, ragOptions(), q)   // локальный retrieval один раз, без облака
                 ragVsLocal = timeRagVs("Локальная · $ragLocalModel", true) { k.generate(localGw, after, q) }
                 ragVsCloud = if (cloudGw != null) timeRagVs("Облачная · deepseek-chat", true) { k.generate(cloudGw, after, q) }
                     else RagVsResult("Облачная", false, null, 0, "Нет облачного ключа — RAG работает и без него, чисто локально.")
             }.onFailure { ragNote = "Ошибка сравнения: ${it.message}" }
-            runCatching { localGw.close() }
-            runCatching { cloudGw?.close() }
+            runCatchingCancellable { localGw.close() }
+            runCatchingCancellable { cloudGw?.close() }
             (emb as? OllamaEmbedder)?.close()
             ragVsRunning = false
         }
@@ -1134,7 +1165,7 @@ class ChatState(
 
     private suspend fun timeRagVs(label: String, available: Boolean, block: suspend () -> RagAnswer): RagVsResult {
         val start = System.currentTimeMillis()
-        return runCatching { block() }.fold(
+        return runCatchingCancellable { block() }.fold(
             onSuccess = { RagVsResult(label, available, it, System.currentTimeMillis() - start, null) },
             onFailure = { RagVsResult(label, available, null, System.currentTimeMillis() - start, it.message) },
         )
@@ -1158,7 +1189,7 @@ class ChatState(
         goldProgress = "Подготовка…"
         scope.launch {
             val emb = newEmbedder()
-            runCatching {
+            runCatchingCancellable {
                 knowledge().goldAnswers(gw, emb, ragOptions()) { i, n -> goldProgress = "вопрос $i/$n" }
             }.onSuccess { goldAnswers = it; goldProgress = "" }
                 .onFailure { ragNote = "Ошибка прогона набора: ${it.message}"; goldProgress = "" }
@@ -1179,7 +1210,7 @@ class ChatState(
         goldRetrievalProgress = "Подготовка…"
         scope.launch {
             val emb = newEmbedder()
-            runCatching {
+            runCatchingCancellable {
                 knowledge().goldRetrieval(client, emb, ragOptions()) { i, n -> goldRetrievalProgress = "вопрос $i/$n" }
             }.onSuccess { goldRetrieval = it; goldRetrievalProgress = "" }
                 .onFailure { ragNote = "Ошибка сравнения поиска: ${it.message}"; goldRetrievalProgress = "" }
@@ -1207,7 +1238,7 @@ class ChatState(
         citationEvalProgress = "Подготовка…"
         scope.launch {
             val emb = newEmbedder()
-            runCatching {
+            runCatchingCancellable {
                 knowledge().citationEval(gw, emb, ragOptions()) { i, n -> citationEvalProgress = "вопрос $i/$n" }
             }.onSuccess { citationChecks = it; citationEvalProgress = "" }
                 .onFailure { ragNote = "Ошибка проверки цитат: ${it.message}"; citationEvalProgress = "" }
@@ -1289,7 +1320,7 @@ class ChatState(
                 config.mcpRemoteUrl.ifBlank { null }, config.mcpRemoteToken.ifBlank { null },
                 true, config.extraMcpEnabled,   // «через MCP»: visa нужен для сравнения по токенам
             )
-            runCatching {
+            runCatchingCancellable {
                 val tools = gw.listTools()
                 val messages = listOf(Message(Role.System, VISA_SYSTEM_PROMPT), Message(Role.User, goal))
                 llm.complete(messages, tools) { name, args -> gw.callToolJson(name, args) }
@@ -1297,7 +1328,7 @@ class ChatState(
                 val steps = resp.toolResults.map { PipelineStep(it.name, "🔧 ${it.name}(${it.args.take(60)})", it.result, true) }
                 connectorMcpRun = ConnectorRun(resp.text, steps, resp.usage)
             }.onFailure { connectorMcpRun = ConnectorRun("ошибка: ${it.message}", emptyList(), null) }
-            if (temp) runCatching { gw.close() }
+            if (temp) runCatchingCancellable { gw.close() }
             connectorRunning = false
         }
     }
@@ -1309,7 +1340,7 @@ class ChatState(
         if (goal.isEmpty() || connectorRunning) return
         connectorRunning = true; connectorVia = "Skill"; connectorSkillRun = null
         scope.launch {
-            runCatching {
+            runCatchingCancellable {
                 engine.run(SkillDocs.load("visa-cli"), emptyList(), goal)
             }.onSuccess { r ->
                 val steps = r.calls.map { PipelineStep("visa-cli", "[CLI] ${it.command}", it.result, true) }
@@ -1337,7 +1368,7 @@ class ChatState(
         if (promptTuneRunning) return
         promptTuneRunning = true; promptTuneNote = null
         scope.launch {
-            runCatching {
+            runCatchingCancellable {
                 val data = runner.run("visa-cli prompt-tune collect")
                 analyzer.analyze(data)
             }.onSuccess { props ->
@@ -1382,7 +1413,7 @@ class ChatState(
         if (ctx.interviewOffered || ctx.offer.isNotBlank()) return
         if (ctx.state != TaskState.EXECUTION && ctx.state != TaskState.VALIDATION) return
         val justDone = ctx.plan.getOrNull(ctx.step - 1).orEmpty()
-        val offer = runCatching { agent.check(ctx.task, justDone) }.getOrNull() ?: return
+        val offer = runCatchingCancellable { agent.check(ctx.task, justDone) }.getOrNull() ?: return
         val cur = current ?: return
         if (cur.id != conv.id) return
         val curCtx = cur.task ?: return
@@ -1417,7 +1448,7 @@ class ChatState(
         interviewLoading = true
         val taskText = ctx.task
         scope.launch {
-            runCatching { ia.turn(taskText, emptyList()) }
+            runCatchingCancellable { ia.turn(taskText, emptyList()) }
                 .onSuccess { interviewMessages = listOf(Message(Role.Assistant, it.text, usage = it.usage)) }
                 .onFailure { error = it.message ?: "Ошибка собеседования" }
             interviewLoading = false
@@ -1435,7 +1466,7 @@ class ChatState(
         val history = interviewMessages
         interviewLoading = true
         scope.launch {
-            runCatching { ia.turn(taskText, history) }
+            runCatchingCancellable { ia.turn(taskText, history) }
                 .onSuccess { interviewMessages = interviewMessages + Message(Role.Assistant, it.text, usage = it.usage) }
                 .onFailure { error = it.message ?: "Ошибка собеседования" }
             interviewLoading = false
@@ -1450,7 +1481,7 @@ class ChatState(
         val history = interviewMessages
         interviewLoading = true
         scope.launch {
-            runCatching { ia.evaluate(taskText, history) }
+            runCatchingCancellable { ia.evaluate(taskText, history) }
                 .onSuccess {
                     interviewMessages = interviewMessages + Message(Role.Assistant, it.text, usage = it.usage)
                     interviewFinished = true
@@ -1593,7 +1624,7 @@ class ChatState(
         val extractor = memoryExtractor ?: return
         val store = memory ?: return
         val recent = conv.messages.takeLast(EXTRACT_WINDOW)
-        val update = runCatching { extractor.extract(recent, store.loadWorking(conv.id), store.loadLongTerm()) }
+        val update = runCatchingCancellable { extractor.extract(recent, store.loadWorking(conv.id), store.loadLongTerm()) }
             .getOrNull() ?: return
         if (update.isEmpty) return
         update.goal?.let { store.setGoal(conv.id, it) }
@@ -1669,8 +1700,8 @@ class ChatState(
     fun dispose() {
         client?.close()
         extractorClient?.close()
-        mcpGateway?.let { g -> scope.launch { runCatching { g.close() } } }
-        agentTools?.let { g -> scope.launch { runCatching { g.close() } } }
+        mcpGateway?.let { g -> scope.launch { runCatchingCancellable { g.close() } } }
+        agentTools?.let { g -> scope.launch { runCatchingCancellable { g.close() } } }
     }
 
     private fun rebuildAgent() {
@@ -1697,7 +1728,7 @@ class ChatState(
         // MCP-инструменты для оркестратора (Фаза 2): постоянный гейтвей, лениво подключается при первом вызове.
         // День 18: если задан удалённый MCP (VPS) — агент ходит за инструментами туда (SSE+токен), иначе локально.
         // День 20: если MCP выключен переключателем — гейтвей не создаём (агент идёт без MCP-схем).
-        agentTools?.let { old -> scope.launch { runCatching { old.close() } } }
+        agentTools?.let { old -> scope.launch { runCatchingCancellable { old.close() } } }
         agentTools = if (config.mcpEnabled || config.extraMcpEnabled) toolGatewayFactory(
             extractorLlm?.apiKey,
             config.mcpRemoteUrl.ifBlank { null }, config.mcpRemoteToken.ifBlank { null },
