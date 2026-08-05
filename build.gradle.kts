@@ -53,6 +53,26 @@ java {
 // День 16 (MCP, Вариант 2): консольная проверка — клиент подключается к локальному
 // MCP-серверу (поднимается как подпроцесс через stdio) и печатает список инструментов.
 //   Запуск: .\gradlew.bat runMcpDemo
+// День 31: приёмка ассистента разработчика целиком (индексация доков + git через MCP + ответы).
+//   Запуск: .\gradlew.bat runDevHelp   (нужна Ollama: nomic-embed-text + qwen2.5:7b)
+tasks.register<JavaExec>("runDevHelp") {
+    group = "application"
+    description = "День 31: /help в консоли — RAG по докам проекта + git-ветка через MCP"
+    mainClass.set("com.example.adventdesktop.cli.DevHelpMainKt")
+    classpath = sourceSets["main"].runtimeClasspath
+    jvmArgs("-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8")
+}
+
+// День 31: приёмка dev-MCP (git-инструменты ассистента разработчика).
+//   Запуск: .\gradlew.bat runDevMcp
+tasks.register<JavaExec>("runDevMcp") {
+    group = "application"
+    description = "День 31: dev-MCP — текущая ветка, статус и файлы проекта через MCP"
+    mainClass.set("com.example.adventdesktop.mcp.DevMcpDemoMainKt")
+    classpath = sourceSets["main"].runtimeClasspath
+    jvmArgs("-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8")
+}
+
 tasks.register<JavaExec>("runMcpDemo") {
     group = "application"
     description = "День 16: подключение к MCP и вывод списка доступных инструментов"
