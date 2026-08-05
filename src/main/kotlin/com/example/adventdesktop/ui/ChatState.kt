@@ -956,6 +956,21 @@ class ChatState(
 
     private fun newEmbedder(): Embedder = if (ragUseOllama) OllamaEmbedder() else HashingEmbedder()
 
+    /** Опции RAG для агента (дефолт: contextual + реранк + порог) — общие для ретривера и выбора эмбеддера. */
+    private val agentRagOptions = RagOptions()
+
+    /**
+     * Эмбеддер ЗАПРОСА для агентского RAG — по `embedder_id` ИНДЕКСА, а не по тумблеру панели. Иначе при
+     * офлайн-фолбэке поиск по ollama-индексу вернёт произвольные документы БЕЗ единой ошибки: размерности
+     * совпадают (768), поэтому проверка размера не срабатывает, а ответ тихо строится на случайных выдержках.
+     * Тот же приём, что в [devQueryEmbedder] для индекса доков проекта.
+     */
+    private fun ragQueryEmbedder(): Embedder {
+        val id = knowledge().stats(agentRagOptions.strategy)?.embedderId ?: return newEmbedder()
+        return if (id.startsWith(OLLAMA_EMBEDDER_PREFIX)) OllamaEmbedder(model = id.removePrefix(OLLAMA_EMBEDDER_PREFIX))
+        else HashingEmbedder()
+    }
+
     fun chooseRagEmbedder(useOllama: Boolean) { ragUseOllama = useOllama }
 
     fun openRag() {
@@ -1904,7 +1919,7 @@ class ChatState(
 
         agent = client?.let { VisaAgent(it, guard) }
         // День 25: RAG в агенте — ретривер по внутренней базе знаний (детерминированно, без LLM). Тумблер в настройках.
-        val retriever = if (config.ragInAgentEnabled) RagKnowledgeRetriever(knowledge(), ::newEmbedder) else null
+        val retriever = if (config.ragInAgentEnabled) RagKnowledgeRetriever(knowledge(), ::ragQueryEmbedder, agentRagOptions) else null
         orchestrator = client?.let { TaskOrchestrator(it, guard, tools = agentTools, toolGuard = ToolCallGuard(), serviceGateway = serviceGateway, retriever = retriever).apply { invariants = this@ChatState.invariants } }
         interviewAgent = client?.let { MockInterviewAgent(it) }
         // День 20: навык (Skill + CLI). CLI читает активный аккаунт сам (accounts.json), поэтому id не пробрасываем.
