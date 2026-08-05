@@ -67,6 +67,9 @@ private fun rememberAppState(): ChatState {
                     else -> McpClient(deepseekApiKey = key)
                 }
             },
+            // День 31: ассистент разработчика — свой локальный MCP-сервер с git-инструментами по проекту.
+            // Отдельный от визового: `/help` обязан работать независимо от настроек MCP-панели.
+            devToolGatewayFactory = { McpClient(serverMainClass = "com.example.adventdesktop.mcp.DevMcpServerKt") },
             scope = scope
         )
     }

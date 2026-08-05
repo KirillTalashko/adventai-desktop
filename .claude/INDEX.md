@@ -20,6 +20,7 @@
 | [WEEK_4_MCP_AND_SKILLS.md](WEEK_4_MCP_AND_SKILLS.md) | дорожная карта Недели 4 (Дни 16–20): MCP-клиент, свой MCP-сервер, Skill+CLI, сравнение токенов |
 | [WEEK_5_RAG.md](WEEK_5_RAG.md) | дорожная карта Недели 5 (с Дня 21): RAG, эмбеддинги (Ollama nomic-embed-text), chunking+overlap, reranking, метрики |
 | [WEEK_6_LOCAL_LLM.md](WEEK_6_LOCAL_LLM.md) | дорожная карта Недели 6 (с Дня 26): Local LLM, квантизация, Ollama-генерация на localhost, тумблер cloud↔local, сравнение ответов |
+| [WEEK_7_SUBAGENTS_AND_PIPELINE.md](WEEK_7_SUBAGENTS_AND_PIPELINE.md) | дорожная карта Недели 7 (с Дня 31, последняя): субагенты (Fan-Out/Chain/Router), System Tooling, sandboxing, AI-пайплайны, авто-ревью PR (День 32), error handling, метрики, тестирование |
 | [COURSE_NOTES.md](COURSE_NOTES.md) | конспект чата курса: инсайты ведущего (агенты, память, MCP-токены, модели, opsec, карьера, ресурсы) |
 | [AST_INDEX.md](AST_INDEX.md) | структурный поиск по коду (ast-index): команды, когда использовать, авто-обновление индекса |
 

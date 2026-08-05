@@ -24,6 +24,7 @@ import com.example.adventdesktop.data.fetchOllamaModels
 import com.example.adventdesktop.data.ModelOption
 import com.example.adventdesktop.data.Models
 import com.example.adventdesktop.data.ProfileStore
+import com.example.adventdesktop.data.ProjectDocsIndex
 import com.example.adventdesktop.data.PromptOverride
 import com.example.adventdesktop.data.PromptOverrideStore
 import com.example.adventdesktop.data.SkillDocs
@@ -51,6 +52,7 @@ import com.example.adventdesktop.domain.InvariantGuard
 import com.example.adventdesktop.domain.Conversation
 import com.example.adventdesktop.domain.ConversationMeta
 import com.example.adventdesktop.domain.ConversationRepository
+import com.example.adventdesktop.domain.DevAssistant
 import com.example.adventdesktop.domain.LongTermMemory
 import com.example.adventdesktop.domain.MemoryExtractor
 import com.example.adventdesktop.domain.LlmParams
@@ -111,6 +113,13 @@ data class RagStrategyView(
 data class RagComparisonView(val docCount: Int, val fixed: RagStrategyView, val structural: RagStrategyView, val contextual: RagStrategyView)
 
 /** Тулы пайплайна композиции (День 19). Их НЕ отдаём основному агенту-консультанту — только пайплайн-демо. */
+/** День 31 — префикс команды ассистента разработчика и предел показа списка файлов корпуса. */
+private const val HELP_COMMAND = "/help"
+private const val DEV_DOCS_PREVIEW = 25
+
+/** Префикс [OllamaEmbedder.id] — по нему восстанавливаем эмбеддер, которым построен индекс доков. */
+private const val OLLAMA_EMBEDDER_PREFIX = "ollama:"
+
 private val PIPELINE_TOOL_NAMES = setOf("visa_search", "visa_summarize", "save_report")
 
 private const val PIPELINE_AGENT_PROMPT =
@@ -129,6 +138,8 @@ class ChatState(
     private val accounts: AccountStore,
     private val configStore: ConfigStore,
     private val toolGatewayFactory: (deepseekKey: String?, remoteUrl: String?, remoteToken: String?, includeVisa: Boolean, includeExtra: Boolean) -> ToolGateway,
+    /** День 31: отдельный MCP-гейтвей ассистента разработчика (git-инструменты по проекту). */
+    private val devToolGatewayFactory: () -> ToolGateway,
     private val scope: CoroutineScope
 ) {
     // --- глобальное (общее для аккаунтов) ---
@@ -145,6 +156,9 @@ class ChatState(
     private var interviewAgent: MockInterviewAgent? = null
     /** Постоянный MCP-гейтвей для оркестратора (Фаза 2): инструменты интервьюеру/ассистенту. */
     private var agentTools: ToolGateway? = null
+    /** День 31: индекс документации САМОГО проекта и MCP-гейтвей с git-инструментами (команда `/help`). */
+    private var projectDocs: ProjectDocsIndex? = null
+    private var devGateway: ToolGateway? = null
     /** День 20: движок локального навыка (Skill + CLI) — альтернатива MCP. */
     private var skillEngine: SkillEngine? = null
     private var skillRunner: SkillRunner? = null
@@ -371,6 +385,11 @@ class ChatState(
         val repo = conversations ?: return
         val activeAgent = agent
         if (text.isEmpty() || loading) return
+        // День 31 — команда ассистента разработчика: отвечает по докам проекта + живому git-контексту.
+        if (text.startsWith(HELP_COMMAND, ignoreCase = true)) {
+            sendDevHelp(text, conv, repo)
+            return
+        }
         if (activeAgent == null) {
             error = "Нет ключа для провайдера «${model.provider}». Откройте «Настройки»."
             return
@@ -406,6 +425,151 @@ class ChatState(
             loading = false
         }
     }
+
+    // --- День 31: ассистент разработчика (команда /help) ---
+
+    /**
+     * Обработка `/help`: идёт НЕ через визового агента, а через [DevAssistant] — RAG по документации
+     * САМОГО проекта + живой git-контекст через MCP. Весь вывод — прямо в ленте чата.
+     */
+    private fun sendDevHelp(raw: String, conv: Conversation, repo: ConversationRepository) {
+        val arg = raw.trim().removePrefix(HELP_COMMAND).trim()
+        input = ""
+        error = null
+        loading = true
+
+        val isFirstUser = conv.messages.none { it.role == Role.User }
+        var updated = conv.withMessage(Message(Role.User, raw))
+        if (isFirstUser) updated = updated.copy(title = titleFrom(raw))
+        current = updated
+        repo.save(updated)
+        refreshList()
+
+        scope.launch {
+            val reply = try {
+                when {
+                    arg.isEmpty() -> devHelpOverview()
+                    arg.equals("index", ignoreCase = true) || arg.equals("индекс", ignoreCase = true) -> devReindex()
+                    else -> devAnswer(arg)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                "⚠️ Ошибка ассистента разработчика: ${e.message}"
+            } finally {
+                loading = false
+            }
+            val withReply = updated.withMessage(Message(Role.Assistant, reply))
+            if (current?.id == updated.id) current = withReply
+            repo.save(withReply)
+            refreshList()
+        }
+    }
+
+    /** `/help` без аргумента — что умею, состояние индекса и какие файлы в корпусе. */
+    private fun devHelpOverview(): String {
+        val index = projectDocs()
+        val stats = index.stats()
+        val docs = index.documents()
+        return buildString {
+            appendLine("**Ассистент разработчика** — отвечаю на вопросы об этом проекте по его документации.")
+            appendLine()
+            appendLine("• `/help <вопрос>` — ответ по докам проекта + текущая git-ветка (через MCP)")
+            appendLine("• `/help index` — переиндексировать документацию проекта")
+            appendLine()
+            if (stats == null) appendLine("⚠️ Индекс ещё не построен — выполните `/help index`.")
+            else appendLine("Индекс: **${stats.docCount} документов**, ${stats.chunkCount} чанков, эмбеддер `${stats.embedderId}`.")
+            appendLine()
+            appendLine("Корпус (${docs.size} файлов):")
+            docs.take(DEV_DOCS_PREVIEW).forEach { appendLine("  • ${it.source}") }
+            if (docs.size > DEV_DOCS_PREVIEW) append("  … и ещё ${docs.size - DEV_DOCS_PREVIEW}")
+        }.trim()
+    }
+
+    /** `/help index` — построить индекс по README + markdown из `.claude` + схемам данных; показать состав. */
+    private suspend fun devReindex(): String {
+        val embedder = newEmbedder()
+        return try {
+            val index = projectDocs()
+            val stats = index.rebuild(embedder)
+            val docs = index.documents()
+            buildString {
+                appendLine(
+                    "✅ Документация проекта проиндексирована: **${stats.docCount} документов**, " +
+                        "${stats.chunkCount} чанков за ${stats.buildMs} мс (эмбеддер `${stats.embedderId}`).",
+                )
+                appendLine()
+                appendLine("В индексе:")
+                docs.take(DEV_DOCS_PREVIEW).forEach { appendLine("  • ${it.source}") }
+                if (docs.size > DEV_DOCS_PREVIEW) append("  … и ещё ${docs.size - DEV_DOCS_PREVIEW}")
+            }.trim()
+        } finally {
+            (embedder as? OllamaEmbedder)?.close()
+        }
+    }
+
+    /** `/help <вопрос>` — ответ по докам проекта; источники и ветка дописываются приложением. */
+    private suspend fun devAnswer(question: String): String {
+        val gateway = client ?: return noKeyError()
+        if (projectDocs().stats() == null) return "⚠️ Индекс доков проекта пуст — сначала выполните `/help index`."
+
+        val answer = DevAssistant(
+            gateway = gateway,
+            retrieveDocs = { q -> devRetrieve(q) },
+            gitContext = { devBranch() },
+        ).help(question)
+
+        return buildString {
+            append(answer.text)
+            answer.branch?.let { appendLine(); appendLine(); append("🌿 Ветка проекта: `$it`") }
+            if (answer.sources.isNotEmpty()) {
+                appendLine(); appendLine()
+                append("📄 Источники: ${answer.sources.joinToString(", ")}")
+            }
+        }
+    }
+
+    /**
+     * Эмбеддер ДЛЯ ЗАПРОСА берём по тому, чем построен индекс, а не по тумблеру RAG-панели. Вектора разных
+     * моделей несопоставимы, а размерность у обеих 768 — проверка размера не сработает, косинус посчитается
+     * «успешно» и вернёт мусор. Симптом был бы тихим: `/help` отвечал бы «в документации этого нет».
+     */
+    private fun devQueryEmbedder(): Embedder {
+        val id = projectDocs().stats()?.embedderId ?: return newEmbedder()
+        return if (id.startsWith(OLLAMA_EMBEDDER_PREFIX)) OllamaEmbedder(model = id.removePrefix(OLLAMA_EMBEDDER_PREFIX))
+        else HashingEmbedder()
+    }
+
+    /** Поиск по индексу доков проекта → доменные [KnowledgeHit] (эмбеддер живёт только на вызов). */
+    private suspend fun devRetrieve(query: String): List<KnowledgeHit> {
+        val embedder = devQueryEmbedder()
+        return try {
+            // client — тот же шлюз, что отвечает: он же переписывает вопрос в поисковый запрос с англ. терминами.
+            projectDocs().search(embedder, query, gateway = client).map { s ->
+                KnowledgeHit(
+                    source = s.chunk.meta.source,
+                    section = s.chunk.meta.section,
+                    chunkId = s.chunk.meta.chunkId,
+                    score = s.score,
+                    text = s.chunk.text.trim(),
+                )
+            }
+        } finally {
+            (embedder as? OllamaEmbedder)?.close()
+        }
+    }
+
+    /** Текущая git-ветка ЖИВЬЁМ через MCP-инструмент `git_current_branch` (best-effort: нет MCP → null). */
+    private suspend fun devBranch(): String? {
+        val gateway = devGateway ?: devToolGatewayFactory().also { devGateway = it }
+        return runCatchingCancellable { gateway.callTool("git_current_branch") }
+            .getOrNull()?.trim()?.ifBlank { null }
+    }
+
+    /** Индекс доков проекта: своя база `~/.adventai/devdocs`, корпус читается из рабочего каталога процесса. */
+    private fun projectDocs(): ProjectDocsIndex =
+        projectDocs ?: ProjectDocsIndex(File(appHomeDir(), "devdocs"), File(System.getProperty("user.dir")))
+            .also { projectDocs = it }
 
     // --- задача (конечный автомат, День 13) ---
 
@@ -1702,6 +1866,9 @@ class ChatState(
         extractorClient?.close()
         mcpGateway?.let { g -> scope.launch { runCatchingCancellable { g.close() } } }
         agentTools?.let { g -> scope.launch { runCatchingCancellable { g.close() } } }
+        // День 31: гасим подпроцесс dev-MCP и закрываем базу индекса доков проекта.
+        devGateway?.let { g -> scope.launch { runCatchingCancellable { g.close() } } }
+        projectDocs?.close()
     }
 
     private fun rebuildAgent() {

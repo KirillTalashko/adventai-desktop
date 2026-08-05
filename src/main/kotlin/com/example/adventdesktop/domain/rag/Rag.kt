@@ -72,6 +72,13 @@ interface Embedder {
      */
     suspend fun embedDocument(text: String): FloatArray = embed(text)
     suspend fun embedQuery(text: String): FloatArray = embed(text)
+
+    /**
+     * ПАЧКА документов одним вызовом. Индексация упирается не в счёт, а в задержку на запрос: сотни чанков
+     * по одному — это минуты, та же сотня одной пачкой — секунды. По умолчанию — честный последовательный
+     * фолбэк, чтобы реализации без батч-API (напр. [HashingEmbedder]) продолжали работать без изменений.
+     */
+    suspend fun embedDocuments(texts: List<String>): List<FloatArray> = texts.map { embedDocument(it) }
 }
 
 /** Статистика построенного индекса одной стратегии — основа сравнения 2 стратегий chunking. */

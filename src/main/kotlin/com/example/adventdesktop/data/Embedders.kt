@@ -24,6 +24,13 @@ private data class OllamaEmbedRequest(val model: String, val prompt: String)
 @Serializable
 private data class OllamaEmbedResponse(val embedding: List<Double> = emptyList())
 
+/** Батч-эндпойнт `/api/embed`: на вход массив строк, на выход массив векторов (Ollama ≥ 0.3). */
+@Serializable
+private data class OllamaBatchRequest(val model: String, val input: List<String>)
+
+@Serializable
+private data class OllamaBatchResponse(val embeddings: List<List<Double>> = emptyList())
+
 /**
  * Эмбеддер на **локальной Ollama** (День 21) — путь курса недели RAG. Обычный HTTP-клиент на
  * `localhost:11434/api/embeddings` (модель по умолчанию `nomic-embed-text`, 768). Локальный адрес → БЕЗ
@@ -74,6 +81,32 @@ class OllamaEmbedder(
 
     override suspend fun embedQuery(text: String): FloatArray =
         embed(if (usesPrefix) "search_query: $text" else text)
+
+    /**
+     * Батч-векторизация документов одним HTTP-вызовом (`/api/embed`). Индексация упирается в задержку на
+     * запрос, а не в счёт: пачка из 32 чанков считается примерно столько же, сколько один одиночный вызов.
+     * Порядок ответов соответствует порядку входа. При отказе батч-эндпойнта (старая Ollama) — прозрачный
+     * откат на поштучный путь, чтобы индексация не ломалась.
+     */
+    override suspend fun embedDocuments(texts: List<String>): List<FloatArray> {
+        if (texts.isEmpty()) return emptyList()
+        val prepared = texts.map { t ->
+            val s = t.ifBlank { " " }
+            if (usesPrefix) "search_document: $s" else s
+        }
+        val resp: HttpResponse = runCatchingCancellable {
+            http.post("$baseUrl/api/embed") {
+                contentType(ContentType.Application.Json)
+                setBody(OllamaBatchRequest(model, prepared))
+            }
+        }.getOrElse { return texts.map { embedDocument(it) } }
+
+        if (!resp.status.isSuccess()) return texts.map { embedDocument(it) }
+        val body: OllamaBatchResponse = runCatchingCancellable { resp.body<OllamaBatchResponse>() }
+            .getOrElse { return texts.map { embedDocument(it) } }
+        if (body.embeddings.size != texts.size) return texts.map { embedDocument(it) }
+        return body.embeddings.map { v -> FloatArray(v.size) { v[it].toFloat() } }
+    }
 
     fun close() = http.close()
 }

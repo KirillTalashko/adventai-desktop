@@ -126,14 +126,34 @@ data class RewriteResult(val query: String, val failed: Boolean)
  * При сбое вызова возвращает исходный вопрос с [RewriteResult.failed]=true — чтобы UI различал «упал» и
  * «вернул то же».
  */
-class QueryRewriter(private val gateway: LlmGateway) {
+class QueryRewriter(
+    private val gateway: LlmGateway,
+    /** Промпт переписывания. По умолчанию — визовая база; [DEV_DOCS_REWRITE] — техдокументация проекта. */
+    private val systemPrompt: String = VISA_REWRITE,
+) {
     suspend fun rewrite(question: String): RewriteResult {
-        val sys = "Перепиши вопрос пользователя в КОРОТКИЙ поисковый запрос по визовой базе знаний: ключевые " +
-            "термины (страна, тип визы, суть), без вводных слов и без пояснений. Верни только запрос одной строкой."
+        val sys = systemPrompt
         val resp = runCatchingCancellable {
             gateway.complete(listOf(Message(Role.System, sys), Message(Role.User, question)), params = LlmParams(temperature = 0.0))
         }.getOrNull() ?: return RewriteResult(question, failed = true)
         val out = resp.text.lines().firstOrNull { it.isNotBlank() }?.trim()?.take(200)?.ifBlank { question } ?: question
         return RewriteResult(out, failed = false)
+    }
+
+    companion object {
+        const val VISA_REWRITE =
+            "Перепиши вопрос пользователя в КОРОТКИЙ поисковый запрос по визовой базе знаний: ключевые " +
+                "термины (страна, тип визы, суть), без вводных слов и без пояснений. Верни только запрос одной строкой."
+
+        /**
+         * Техдокументация проекта (День 31). Ключевое отличие — просим ДОБАВИТЬ англоязычные технические
+         * идентификаторы: доки написаны по-русски, но термины в них английские (`Surface(onClick=…)`,
+         * `Modifier.clickable`), и эмбеддер сопоставляет русский пересказ с таким текстом заметно хуже.
+         */
+        const val DEV_DOCS_REWRITE =
+            "Перепиши вопрос разработчика в КОРОТКИЙ поисковый запрос по технической документации проекта " +
+                "(Kotlin, Compose Desktop). Оставь ключевые термины и ОБЯЗАТЕЛЬНО добавь вероятные английские " +
+                "идентификаторы: имена классов, функций, файлов, API. Без вводных слов и пояснений. " +
+                "Верни только запрос одной строкой."
     }
 }
