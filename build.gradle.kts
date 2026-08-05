@@ -122,6 +122,16 @@ tasks.register<ShadowJar>("visaCliJar") {
     isZip64 = true
 }
 
+// Страновой скоуп RAG: приёмка «агент не отвечает по правилам чужой страны» (инварианты словаря + ретрив).
+//   Запуск: .\gradlew.bat runRagCountryCheck   (часть B требует Ollama + построенный индекс)
+tasks.register<JavaExec>("runRagCountryCheck") {
+    group = "verification"
+    description = "Проверить страновой скоуп RAG: чужая страна не попадает в выдачу"
+    mainClass.set("com.example.adventdesktop.cli.RagCountryCheckMainKt")
+    classpath = sourceSets["main"].runtimeClasspath
+    jvmArgs("-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8")
+}
+
 // День 30: fat-jar приватного LLM-сервиса (java -jar visa-llm-service-all.jar; настройки — через env).
 tasks.register<ShadowJar>("llmServiceJar") {
     group = "build"

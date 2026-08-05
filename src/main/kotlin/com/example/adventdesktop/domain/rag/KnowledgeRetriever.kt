@@ -18,7 +18,12 @@ data class KnowledgeHit(
  * Реализация (`data/RagKnowledgeRetriever`) переиспользует двухэтапный пайплайн Дней 23–24 (contextual +
  * реранк + фильтр по порогу). Пусто = релевантного контекста нет → агент опирается на MCP/[СПРАВКА]
  * (аддитивность RAG + MCP). Детерминированно, без вызова LLM (только эмбеддинг + эвристика).
+ *
+ * **Инвариант [scope]:** страновой документ ДРУГОЙ страны не может попасть в выдачу — ограничение
+ * применяется к множеству кандидатов ДО косинуса (см. [CountryScope]). Пустой результат — штатный исход,
+ * а не ошибка: лучше промолчать, чем ответить по правилам чужой страны. `null` — без ограничения
+ * (dev-панель RAG, оценочные прогоны).
  */
 interface KnowledgeRetriever {
-    suspend fun retrieve(query: String): List<KnowledgeHit>
+    suspend fun retrieve(query: String, scope: KnowledgeScope? = null): List<KnowledgeHit>
 }
