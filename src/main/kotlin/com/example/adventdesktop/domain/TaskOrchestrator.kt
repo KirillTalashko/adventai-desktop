@@ -1,5 +1,6 @@
 package com.example.adventdesktop.domain
 
+import com.example.adventdesktop.domain.rag.CountryScope
 import com.example.adventdesktop.domain.rag.KnowledgeHit
 import com.example.adventdesktop.domain.rag.KnowledgeRetriever
 import kotlinx.coroutines.async
@@ -375,6 +376,10 @@ class TaskOrchestrator(
      * День 25: собрать блок [БАЗА ЗНАНИЙ] и источники из внутренней базы (RAG) под ответ. Запрос — из
      * последнего сообщения пользователя (или [queryOverride], напр. текущий шаг) + подсказок кейса (страна,
      * цель) для точности ретрива. Пусто = релевантного нет → блок не добавляем (агент идёт на MCP/[СПРАВКА]).
+     *
+     * **Страновой скоуп:** страна кейса ограничивает МНОЖЕСТВО кандидатов ещё до косинуса ([CountryScope]) —
+     * иначе документ чужой страны выигрывает по «общевизовым» словам и агент отвечает по её правилам.
+     * Страж ниже — второй, независимый рубеж (сработает, даже если порт подменят другой реализацией).
      */
     private suspend fun ragContext(ctx: TaskContext, history: List<Message>, queryOverride: String? = null): Pair<String, List<KnowledgeHit>> {
         val r = retriever ?: return EMPTY_RAG
@@ -384,12 +389,24 @@ class TaskOrchestrator(
         val cf = ctx.caseFile
         val hint = listOf(cf.destination, cf.purpose).filter { it.isNotBlank() }.joinToString(" ")
         val query = if (hint.isBlank()) base else "$hint $base"
-        val hits = runCatchingCancellable { r.retrieve(query) }.getOrDefault(emptyList())
+        val scope = CountryScope.scopeFor(
+            destination = cf.destination,
+            fallbackText = history.lastOrNull { it.role == Role.User }?.text.orEmpty(),
+        )
+        val hits = runCatchingCancellable { r.retrieve(query, scope) }.getOrDefault(emptyList())
+            .filter { scope.allows(it.source) }   // страж выдачи: чужая страна не проходит и здесь
         if (hits.isEmpty()) return EMPTY_RAG
         val block = buildString {
             append("[БАЗА ЗНАНИЙ — выдержки из наших внутренних визовых документов; ссылайся на источники как [S1], [S2]. ")
             append("Точные сборы/сроки/куда подавать бери из [СПРАВКА ПО ВИЗЕ] (живые офиц. ссылки), если она есть; ")
-            append("общие процедуры и пояснения — отсюда. Не выдумывай фактов сверх этих выдержек.]\n")
+            append("общие процедуры и пояснения — отсюда. Не выдумывай фактов сверх этих выдержек.")
+            // Честная деградация: страна известна, но своего документа в базе нет — запрещаем перенос чужих правил.
+            if (scope.isKnown && !scope.hasCountryDoc) {
+                append("\nВНИМАНИЕ: в базе НЕТ документа по стране «").append(cf.destination).append("» — ниже только общие материалы. ")
+                append("Страновые правила бери из [СПРАВКА ПО ВИЗЕ]/инструментов или честно скажи, что данных по стране нет; ")
+                append("НЕ переноси правила других стран.")
+            }
+            append("]\n")
             hits.forEachIndexed { i, h ->
                 append("[S").append(i + 1).append("] (").append(h.source)
                 if (h.section.isNotBlank()) append(" › ").append(h.section)

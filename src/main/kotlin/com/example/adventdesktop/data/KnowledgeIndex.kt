@@ -95,8 +95,20 @@ class KnowledgeIndex(ragDir: File) {
     fun stats(strategy: String): IndexStats? = store.stats(strategy)
     fun strategies(): List<String> = store.strategies()
 
-    suspend fun search(embedder: Embedder, strategy: String, query: String, k: Int = 3): List<Scored> =
-        RagSearch(embedder).search(store.load(strategy), query, k)
+    /**
+     * Косинусный поиск top-[k]. [allow] — предикат допуска по имени файла-источника, применяется ДО косинуса:
+     * так страновой фильтр (День 32) отсекает чужие страны на этапе КАНДИДАТОВ, а не ранжирования — вернуть
+     * документ, не попавший в пул, реранк уже не может. Предикат (а не список) — чтобы неизвестные файлы
+     * (пользовательские) проходили по умолчанию.
+     */
+    suspend fun search(
+        embedder: Embedder,
+        strategy: String,
+        query: String,
+        k: Int = 3,
+        allow: (String) -> Boolean = { true },
+    ): List<Scored> =
+        RagSearch(embedder).search(store.load(strategy).filter { allow(it.chunk.meta.source) }, query, k)
 
     // --- День 22–23: двухэтапный RAG-пайплайн (retrieve → rerank → filter) + ответ + контрольный набор ---
 
@@ -104,7 +116,13 @@ class KnowledgeIndex(ragDir: File) {
      * Второй этап поиска (День 23): [rewrite] запроса → bi-encoder top-N → реранк ([RagOptions.rerank]) →
      * фильтр по порогу → top-K. Возвращает трейс с «до/после» для наглядного сравнения.
      */
-    suspend fun retrieve(gateway: LlmGateway?, embedder: Embedder, options: RagOptions, question: String): RetrievalTrace {
+    suspend fun retrieve(
+        gateway: LlmGateway?,
+        embedder: Embedder,
+        options: RagOptions,
+        question: String,
+        allow: (String) -> Boolean = { true },
+    ): RetrievalTrace {
         val rw = if (options.rewrite && gateway != null) QueryRewriter(gateway).rewrite(question) else null
         val used = rw?.query ?: question
         val outcome = when {
@@ -113,7 +131,7 @@ class KnowledgeIndex(ragDir: File) {
             used != question -> RewriteOutcome.REWRITTEN
             else -> RewriteOutcome.UNCHANGED
         }
-        val pool = search(embedder, options.strategy, used, options.retrieveN)   // широкий пул bi-encoder
+        val pool = search(embedder, options.strategy, used, options.retrieveN, allow)   // широкий пул bi-encoder
         val before = pool.take(options.topK)                                     // baseline: сырой top-K по cosine
         val reranked = when (options.rerank) {
             RerankMode.OFF -> pool
