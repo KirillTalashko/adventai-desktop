@@ -1238,6 +1238,22 @@ class ChatState(
         }
     }
 
+    /**
+     * Общий каркас async-прогона RAG-панели: `launch` → [newEmbedder] → [block] → закрыть эмбеддер → [onDone].
+     * Сводит 5 копий одного скелета (ragCompare / ragCompareLocalVsCloud / runGoldAnswers / runGoldRetrieval /
+     * runCitationEval). Guard (`if (running) return`), взвод флага и сброс полей — в самом методе (различны);
+     * [block] сам решает onSuccess/onFailure. Закрытие эмбеддера теперь в ОДНОМ месте (было 5 копий — там же
+     * чинилась «утечка при исключении»).
+     */
+    private fun ragJob(onDone: () -> Unit, block: suspend (Embedder) -> Unit) {
+        scope.launch {
+            val emb = newEmbedder()
+            block(emb)
+            (emb as? OllamaEmbedder)?.close()
+            onDone()
+        }
+    }
+
     /** Дружелюбная подсказка при 401 (частая причина — токен в поле не совпал с LLM_AUTH_TOKEN сервиса). */
     private fun auth401(status: Int): String = if (status == 401) "  ⚠ токен в поле ≠ LLM_AUTH_TOKEN сервиса" else ""
 
@@ -1285,8 +1301,7 @@ class ChatState(
         ragAnswerRag = null
         ragAnswerPlain = null
         ragTrace = null
-        scope.launch {
-            val emb = newEmbedder()
+        ragJob({ ragAnswering = false }) { emb ->
             runCatchingCancellable {
                 val k = knowledge()
                 ragAnswerPlain = k.answer(gw, emb, q, useRag = false)          // без RAG — из общих знаний модели
@@ -1294,8 +1309,6 @@ class ChatState(
                 ragAnswerRag = ans
                 ragTrace = trace
             }.onFailure { ragNote = "Ошибка ответа: ${it.message}" }
-            (emb as? OllamaEmbedder)?.close()
-            ragAnswering = false
         }
     }
 
@@ -1328,8 +1341,7 @@ class ChatState(
         val q = ragQuery.trim()
         if (q.isEmpty() || ragVsRunning) return
         ragVsRunning = true; ragNote = null; ragVsLocal = null; ragVsCloud = null
-        scope.launch {
-            val emb = newEmbedder()
+        ragJob({ ragVsRunning = false }) { emb ->
             val localGw = LocalLlmClient(model = ragLocalModel)
             val cloudGw = resolveLlmConfig(Models.byId("deepseek-chat"), config)?.let { LlmClient(it) }
             runCatchingCancellable {
@@ -1341,8 +1353,6 @@ class ChatState(
             }.onFailure { ragNote = "Ошибка сравнения: ${it.message}" }
             runCatchingCancellable { localGw.close() }
             runCatchingCancellable { cloudGw?.close() }
-            (emb as? OllamaEmbedder)?.close()
-            ragVsRunning = false
         }
     }
 
@@ -1370,14 +1380,11 @@ class ChatState(
         ragNote = null
         goldAnswers = emptyList()
         goldProgress = "Подготовка…"
-        scope.launch {
-            val emb = newEmbedder()
+        ragJob({ goldRunning = false }) { emb ->
             runCatchingCancellable {
                 knowledge().goldAnswers(gw, emb, ragOptions()) { i, n -> goldProgress = "вопрос $i/$n" }
             }.onSuccess { goldAnswers = it; goldProgress = "" }
                 .onFailure { ragNote = "Ошибка прогона набора: ${it.message}"; goldProgress = "" }
-            (emb as? OllamaEmbedder)?.close()
-            goldRunning = false
         }
     }
 
@@ -1391,14 +1398,11 @@ class ChatState(
         ragNote = null
         goldRetrieval = emptyList()
         goldRetrievalProgress = "Подготовка…"
-        scope.launch {
-            val emb = newEmbedder()
+        ragJob({ goldRetrievalRunning = false }) { emb ->
             runCatchingCancellable {
                 knowledge().goldRetrieval(client, emb, ragOptions()) { i, n -> goldRetrievalProgress = "вопрос $i/$n" }
             }.onSuccess { goldRetrieval = it; goldRetrievalProgress = "" }
                 .onFailure { ragNote = "Ошибка сравнения поиска: ${it.message}"; goldRetrievalProgress = "" }
-            (emb as? OllamaEmbedder)?.close()
-            goldRetrievalRunning = false
         }
     }
 
@@ -1419,14 +1423,11 @@ class ChatState(
         ragNote = null
         citationChecks = emptyList()
         citationEvalProgress = "Подготовка…"
-        scope.launch {
-            val emb = newEmbedder()
+        ragJob({ citationEvalRunning = false }) { emb ->
             runCatchingCancellable {
                 knowledge().citationEval(gw, emb, ragOptions()) { i, n -> citationEvalProgress = "вопрос $i/$n" }
             }.onSuccess { citationChecks = it; citationEvalProgress = "" }
                 .onFailure { ragNote = "Ошибка проверки цитат: ${it.message}"; citationEvalProgress = "" }
-            (emb as? OllamaEmbedder)?.close()
-            citationEvalRunning = false
         }
     }
 
