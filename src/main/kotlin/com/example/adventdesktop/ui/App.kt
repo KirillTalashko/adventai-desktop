@@ -28,6 +28,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.material.icons.Icons
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material.icons.filled.Add
@@ -654,15 +655,13 @@ private fun LocalLlmResultCard(r: ChatState.LocalLlmResult) {
 @Composable
 private fun OptRunCard(label: String, r: LocalRun, tuned: Boolean) {
     val accent = if (tuned) AppColors.accent else MaterialTheme.colorScheme.onSurfaceVariant
-    Surface(color = accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(label, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = accent)
-            Text(
-                "⏱ ${r.ms} мс · ${"%.0f".format(r.tokPerSec)} ток/с · вход ${r.promptTokens} / выход ${r.evalTokens} ток.",
-                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            ExpandableText(r.text, collapsedLines = 6)
-        }
+    ResultCard(color = accent) {
+        Text(label, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = accent)
+        Text(
+            "⏱ ${r.ms} мс · ${"%.0f".format(r.tokPerSec)} ток/с · вход ${r.promptTokens} / выход ${r.evalTokens} ток.",
+            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        ExpandableText(r.text, collapsedLines = 6)
     }
 }
 
@@ -886,18 +885,16 @@ private fun RagVsView(state: ChatState) {
 @Composable
 private fun RagVsCard(r: ChatState.RagVsResult, localCol: Boolean) {
     val accent = if (localCol) AppColors.accent else MaterialTheme.colorScheme.onSurfaceVariant
-    Surface(color = accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            val head = (if (localCol) "⚡ " else "☁ ") + r.label +
-                (r.answer?.let { " · ${r.ms} мс · ${it.usage?.total ?: 0} ток." } ?: "")
-            Text(head, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = accent)
-            when {
-                !r.available -> Text(r.error ?: "недоступно", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                r.error != null -> Text("Ошибка: ${r.error}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                r.answer != null -> {
-                    if (r.answer.abstained) Text("🚫 режим «не знаю» — контекст слабее порога", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
-                    ExpandableText(r.answer.text, collapsedLines = 6)
-                }
+    ResultCard(color = accent) {
+        val head = (if (localCol) "⚡ " else "☁ ") + r.label +
+            (r.answer?.let { " · ${r.ms} мс · ${it.usage?.total ?: 0} ток." } ?: "")
+        Text(head, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = accent)
+        when {
+            !r.available -> Text(r.error ?: "недоступно", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            r.error != null -> Text("Ошибка: ${r.error}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            r.answer != null -> {
+                if (r.answer.abstained) Text("🚫 режим «не знаю» — контекст слабее порога", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                ExpandableText(r.answer.text, collapsedLines = 6)
             }
         }
     }
@@ -1037,26 +1034,24 @@ private fun GoldRetrievalRow(r: GoldRetrieval) {
 @Composable
 private fun RagAnswerCard(a: RagAnswer, warn: Boolean, whatIs: String, note: String? = null) {
     val accent = if (warn) MaterialTheme.colorScheme.error else AppColors.accent
-    Surface(color = accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("${a.mode} — $whatIs", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = accent)
-            if (a.abstained) Text("🚫 режим «не знаю» — контекст слабее порога, ответ не выдумывается", fontWeight = FontWeight.Medium, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
-            note?.let { Text(it, fontWeight = FontWeight.Medium, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error) }
-            val toks = a.usage?.let { "${it.total} ток." } ?: "—"
-            val ctx = if (a.contextChars > 0) "контекст ${a.contextChars} симв." else "без контекста базы"
-            Text("$toks · $ctx", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            ExpandableText(a.text, collapsedLines = 6)
-            if (a.sources.isNotEmpty()) {
-                Text("Источники (файл › раздел · chunk_id):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                a.sources.forEach { s ->
-                    Text("[${s.n}] %.3f · %s › %s · %s".format(s.score, s.source, s.section, s.chunkId), style = MaterialTheme.typography.labelSmall, color = accent)
-                }
+    ResultCard(color = accent) {
+        Text("${a.mode} — $whatIs", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = accent)
+        if (a.abstained) Text("🚫 режим «не знаю» — контекст слабее порога, ответ не выдумывается", fontWeight = FontWeight.Medium, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+        note?.let { Text(it, fontWeight = FontWeight.Medium, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error) }
+        val toks = a.usage?.let { "${it.total} ток." } ?: "—"
+        val ctx = if (a.contextChars > 0) "контекст ${a.contextChars} симв." else "без контекста базы"
+        Text("$toks · $ctx", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        ExpandableText(a.text, collapsedLines = 6)
+        if (a.sources.isNotEmpty()) {
+            Text("Источники (файл › раздел · chunk_id):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            a.sources.forEach { s ->
+                Text("[${s.n}] %.3f · %s › %s · %s".format(s.score, s.source, s.section, s.chunkId), style = MaterialTheme.typography.labelSmall, color = accent)
             }
-            if (a.citations.isNotEmpty()) {
-                Text("Цитаты (дословно из источников):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                a.citations.forEach { c ->
-                    Text("[${c.n}] «${c.quote}»", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
-                }
+        }
+        if (a.citations.isNotEmpty()) {
+            Text("Цитаты (дословно из источников):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            a.citations.forEach { c ->
+                Text("[${c.n}] «${c.quote}»", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
             }
         }
     }
@@ -1261,17 +1256,31 @@ private fun InstalledSkillRow(title: String, subtitle: String) {
     }
 }
 
+/**
+ * Атом UI-kit: рамка карточки результата (accent-подложка · Radii.xs · во всю ширину · Column padding 10/spacing 4).
+ * Сводит 4 карточки (Opt/Connector/RagVs/RagAnswer); `color`/`alpha` параметризованы (у части — условный accent).
+ * `LocalLlmResultCard` НЕ входит — у него другой каркас (surfaceVariant, 10.dp), это не флаг атома.
+ */
+@Composable
+private fun ResultCard(
+    color: Color = AppColors.accent,
+    alpha: Float = 0.08f,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Surface(color = color.copy(alpha = alpha), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp), content = content)
+    }
+}
+
 /** Результат одного прогона коннектора (MCP/Skill): токены, след вызовов и ответ. */
 @Composable
 private fun ConnectorResultView(label: String, run: ConnectorRun?) {
     if (run == null) return
-    Surface(color = AppColors.accent.copy(alpha = 0.06f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            val toks = run.usage?.let { "prompt ${it.prompt} · total ${it.total}" } ?: "—"
-            Text("$label · токены: $toks", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
-            run.steps.forEach { Text(it.title, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            ExpandableText(run.reply, collapsedLines = 5)
-        }
+    ResultCard(alpha = 0.06f) {
+        val toks = run.usage?.let { "prompt ${it.prompt} · total ${it.total}" } ?: "—"
+        Text("$label · токены: $toks", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
+        run.steps.forEach { Text(it.title, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        ExpandableText(run.reply, collapsedLines = 5)
     }
 }
 

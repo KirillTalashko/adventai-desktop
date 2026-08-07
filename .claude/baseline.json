@@ -31,7 +31,7 @@
   "progress": [
     { "step": "A5 · IconActionButton", "change": "4 обёртки-кнопки (MCP/коннекторы/RAG/локальная LLM) → 1 атом", "appKtLoc": "1849 → 1812", "composables": "44 → 41", "deltaLoc": -37, "note": "SendButton оставлен — первичная кнопка, отдельная семантика" },
     { "step": "A · cioJsonClient", "change": "5 конструкций HttpClient(CIO){…} в data → 1 фабрика; таймауты централизованы", "httpClientCtorInData": "6 → 2 (фабрика + SSE MCP)", "deltaLoc": -9, "note": "нетто −9 (файлы −42, фабрика +33); главное — DRY + единый источник таймаутов" },
-    { "step": "ResultCard (ОТКЛОНЁН гейтом)", "change": "4 карточки → 1 атом", "deltaLoc": 9, "note": "гейт net-LOC отклонил: рамка = 2 строки/место, атом дороже → рост строк. Откачен, не закоммичен" },
+    { "step": "ResultCard (принят решением пользователя)", "change": "4 карточки (Opt/Connector/RagVs/RagAnswer) → 1 атом; LocalLlmResultCard оставлен (другой каркас)", "appKtLoc": "1812 → 1821", "deltaLoc": 9, "note": "гейт net-LOC был против (+9: рамка = 2 строки/место, атом дороже), но пользователь осознанно взял ради дедупа рамки 4→1, меньшей вложенности и переиспользуемого атома. Компромисс LOC↑ vs dup↓/reuse↑" },
     { "step": "A1 · характеризующий харнесс", "change": "cli/TaskFlowCheckMain + задача runTaskFlowCheck: 12 проверок TaskOrchestrator (стадии/переходы/cancel/awaiting/вырезание тега)", "deltaLoc": "тест-сеть (не сокращение)", "note": "Feathers-сеть безопасности ПЕРЕД PanelOp/расшивкой ChatState; детерминированно без сети; все 12 PASS" }
   ]
 }
