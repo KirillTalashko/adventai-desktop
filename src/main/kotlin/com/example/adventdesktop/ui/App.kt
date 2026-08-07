@@ -1276,6 +1276,28 @@ private fun ConnectorToggleRow(title: String, subtitle: String, checked: Boolean
     }
 }
 
+/**
+ * Строка установленного скилла БЕЗ переключателя — информационная: название + описание + бейдж «установлен».
+ * Для dev-скиллов Claude Code (напр. рефакторинг): это не рантайм-источник инструментов агента, а факт установки,
+ * поэтому переключателя нет (пустой тумблер вводил бы в заблуждение).
+ */
+@Composable
+private fun InstalledSkillRow(title: String, subtitle: String) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Surface(color = AppColors.accent.copy(alpha = 0.12f), shape = RoundedCornerShape(Radii.xs)) {
+            Text(
+                "установлен",
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = AppColors.accent
+            )
+        }
+    }
+}
+
 /** Результат одного прогона коннектора (MCP/Skill): токены, след вызовов и ответ. */
 @Composable
 private fun ConnectorResultView(label: String, run: ConnectorRun?) {
@@ -1313,6 +1335,14 @@ private fun ConnectorsDialog(state: ChatState) {
                 HorizontalDivider()
                 ConnectorToggleRow("Skill — документы", "локально: visa-cli docs (проверка приложенных файлов)", state.skillDocsEnabled) { state.setSkillDocsEnabled(it) }
                 ConnectorToggleRow("Skill — автоулучшение промтов", "локально: анализ диалогов и точечные предложения", state.skillPromptTuneEnabled) { state.setSkillPromptTuneEnabled(it) }
+                InstalledSkillRow(
+                    "Skill — рефакторинг архитектуры",
+                    "Claude Code · SOLID/DRY/KISS: детект платформы, Mikado-цепочки, рой агентов (.claude/skills/refactor-architecture)"
+                )
+                Text(
+                    "Установлено скиллов: 3 — документы · автоулучшение промтов · рефакторинг архитектуры",
+                    style = MaterialTheme.typography.labelMedium, color = AppColors.accent, fontWeight = FontWeight.SemiBold
+                )
                 HorizontalDivider()
                 Text("Сравнить на одном вопросе:", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
                 OutlinedTextField(

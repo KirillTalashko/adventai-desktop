@@ -16,6 +16,9 @@
 | [STATE_MACHINE.md](STATE_MACHINE.md) | конечный автомат задачи: агент на стадию, переходы в коде, pause/resume (День 13) |
 | [INVARIANTS.md](INVARIANTS.md) | инварианты состояния: хранение, инжект в промпт, страж, отказ при конфликте (День 14) |
 | [ANTIPATTERNS.md](ANTIPATTERNS.md) | чего не делать |
+| [ARCHITECTURE_AUDIT.md](ARCHITECTURE_AUDIT.md) | аудит god-object `ChatState` (SOLID/DRY/KISS), эталоны биг-техов, план рефакторинга + промпт-скилл |
+| [MODULARIZATION.md](MODULARIZATION.md) | многомодульная архитектура проекта (7 модулей), логическая связка, порядок «с чего начинать», контрмеры против разбухания кода |
+| [REFACTOR_SKILL.md](REFACTOR_SKILL.md) | переносимый скилл: платформо-осознанный рефакторинг (desktop/web/mobile/backend), метод Mikado, рой агентов, кросс-стек инструменты границ |
 | [MCP.md](MCP.md) | подключение к MCP: порт `ToolGateway`, клиент (stdio-подпроцесс), локальный сервер, кнопка в UI (День 16) |
 | [WEEK_4_MCP_AND_SKILLS.md](WEEK_4_MCP_AND_SKILLS.md) | дорожная карта Недели 4 (Дни 16–20): MCP-клиент, свой MCP-сервер, Skill+CLI, сравнение токенов |
 | [WEEK_5_RAG.md](WEEK_5_RAG.md) | дорожная карта Недели 5 (с Дня 21): RAG, эмбеддинги (Ollama nomic-embed-text), chunking+overlap, reranking, метрики |
