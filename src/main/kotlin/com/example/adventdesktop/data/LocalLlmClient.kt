@@ -6,11 +6,7 @@ import com.example.adventdesktop.domain.LlmParams
 import com.example.adventdesktop.domain.Message
 import com.example.adventdesktop.domain.TokenUsage
 import com.example.adventdesktop.domain.Tool
-import io.ktor.client.HttpClient
 import io.ktor.client.call.body
-import io.ktor.client.engine.cio.CIO
-import io.ktor.client.plugins.HttpTimeout
-import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -19,7 +15,6 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
-import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -84,14 +79,8 @@ class LocalLlmClient(
     // encodeDefaults=true → обязательно шлём `stream:false` (иначе Ollama стримит NDJSON и парсинг ломается).
     // explicitNulls=false → не слать null-поля options (temperature/num_predict).
     private val json = Json { ignoreUnknownKeys = true; isLenient = true; explicitNulls = false; encodeDefaults = true }
-    private val http = HttpClient(CIO) {
-        install(ContentNegotiation) { json(json) }
-        install(HttpTimeout) {
-            // Генерация 7B на CPU медленная — даём большой запас; коннект к localhost — быстрый.
-            requestTimeoutMillis = 300_000
-            connectTimeoutMillis = 5_000
-        }
-    }
+    // Генерация 7B на CPU медленная — даём большой запас; коннект к localhost — быстрый.
+    private val http = cioJsonClient(requestTimeoutMs = 300_000, connectTimeoutMs = 5_000, json = json)
 
     override suspend fun complete(
         messages: List<Message>,
@@ -168,10 +157,7 @@ class LocalLlmClient(
  */
 suspend fun fetchOllamaModels(baseUrl: String = "http://localhost:11434"): List<String> {
     val json = Json { ignoreUnknownKeys = true; isLenient = true }
-    val http = HttpClient(CIO) {
-        install(ContentNegotiation) { json(json) }
-        install(HttpTimeout) { requestTimeoutMillis = 8_000; connectTimeoutMillis = 3_000 }
-    }
+    val http = cioJsonClient(requestTimeoutMs = 8_000, connectTimeoutMs = 3_000, json = json)
     return try {
         val resp: OllamaTagsResponse = http.get("$baseUrl/api/tags").body()
         resp.models.map { it.name }.filterNot { it.contains("embed", ignoreCase = true) }.sorted()

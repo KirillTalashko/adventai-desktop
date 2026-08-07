@@ -1,8 +1,5 @@
 package com.example.adventdesktop.data
 
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
-import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -31,9 +28,7 @@ private data class ServiceChatReq(val prompt: String)
 class LlmServiceClient(baseUrl: String, private val token: String?) {
     private val base = baseUrl.trim().trimEnd('/')
     private val json = Json { encodeDefaults = true }
-    private val http = HttpClient(CIO) {
-        install(HttpTimeout) { requestTimeoutMillis = 300_000; connectTimeoutMillis = 5_000 }
-    }
+    private val http = cioJsonClient(requestTimeoutMs = 300_000, connectTimeoutMs = 5_000, json = json, contentNegotiation = false)
 
     /** `GET /health` — жив ли сервис и доступен ли по сети. */
     suspend fun health(): ServiceCall = timed { http.get("$base/health") }

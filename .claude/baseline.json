@@ -29,6 +29,7 @@
   },
   "gate": "net-LOC не вырос · duplication ↓ · LargeClass/LongMethod ↓ · чистый перенос строк при неизменном поведении — норма",
   "progress": [
-    { "step": "A5 · IconActionButton", "change": "4 обёртки-кнопки (MCP/коннекторы/RAG/локальная LLM) → 1 атом", "appKtLoc": "1849 → 1812", "composables": "44 → 41", "deltaLoc": -37, "note": "SendButton оставлен — первичная кнопка, отдельная семантика" }
+    { "step": "A5 · IconActionButton", "change": "4 обёртки-кнопки (MCP/коннекторы/RAG/локальная LLM) → 1 атом", "appKtLoc": "1849 → 1812", "composables": "44 → 41", "deltaLoc": -37, "note": "SendButton оставлен — первичная кнопка, отдельная семантика" },
+    { "step": "A · cioJsonClient", "change": "5 конструкций HttpClient(CIO){…} в data → 1 фабрика; таймауты централизованы", "httpClientCtorInData": "6 → 2 (фабрика + SSE MCP)", "deltaLoc": -9, "note": "нетто −9 (файлы −42, фабрика +33); главное — DRY + единый источник таймаутов" }
   ]
 }
