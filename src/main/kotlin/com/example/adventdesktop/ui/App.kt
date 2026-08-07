@@ -595,25 +595,25 @@ private fun LocalLlmDialog(state: ChatState) {
                         "«Прогнать 3 вопроса» — батч по сети; «Нагрузка ×6» — лимиты (429 rate-limit / 503 занят).",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                OutlinedTextField(value = state.serviceUrl, onValueChange = { state.serviceUrl = it }, label = { Text("URL сервиса") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = state.serviceToken, onValueChange = { state.serviceToken = it }, label = { Text("Токен (LLM_AUTH_TOKEN, если задан)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = state.service.serviceUrl, onValueChange = { state.service.serviceUrl = it }, label = { Text("URL сервиса") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = state.service.serviceToken, onValueChange = { state.service.serviceToken = it }, label = { Text("Токен (LLM_AUTH_TOKEN, если задан)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { state.serviceHealth() }, enabled = !state.serviceRunning, colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)) { Text("GET /health") }
-                    Button(onClick = { state.serviceChat() }, enabled = !state.serviceRunning, colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)) { Text("POST /chat") }
-                    if (state.serviceRunning) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                    Button(onClick = { state.service.serviceHealth() }, enabled = !state.service.serviceRunning, colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)) { Text("GET /health") }
+                    Button(onClick = { state.service.serviceChat() }, enabled = !state.service.serviceRunning, colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)) { Text("POST /chat") }
+                    if (state.service.serviceRunning) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { state.serviceRunSamples() }, enabled = !state.serviceRunning, colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)) { Text("Прогнать 3 вопроса") }
-                    TextButton(onClick = { state.serviceBurst() }, enabled = !state.serviceRunning) { Text("Нагрузка ×6") }
+                    Button(onClick = { state.service.serviceRunSamples() }, enabled = !state.service.serviceRunning, colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)) { Text("Прогнать 3 вопроса") }
+                    TextButton(onClick = { state.service.serviceBurst() }, enabled = !state.service.serviceRunning) { Text("Нагрузка ×6") }
                 }
-                if (state.serviceLog.isNotEmpty()) {
+                if (state.service.serviceLog.isNotEmpty()) {
                     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                 Text("Ответы сервиса (свежие сверху):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                TextButton(onClick = { state.clearServiceLog() }) { Text("очистить", style = MaterialTheme.typography.labelSmall) }
+                                TextButton(onClick = { state.service.clearServiceLog() }) { Text("очистить", style = MaterialTheme.typography.labelSmall) }
                             }
-                            state.serviceLog.asReversed().forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface) }
+                            state.service.serviceLog.asReversed().forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface) }
                         }
                     }
                 }
