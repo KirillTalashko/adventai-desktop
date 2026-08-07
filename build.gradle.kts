@@ -132,6 +132,16 @@ tasks.register<JavaExec>("runRagCountryCheck") {
     jvmArgs("-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8")
 }
 
+// A1 (сеть безопасности рефакторинга): характеризующий харнесс потока задачи (TaskOrchestrator), без сети.
+//   Запуск: .\gradlew.bat runTaskFlowCheck
+tasks.register<JavaExec>("runTaskFlowCheck") {
+    group = "verification"
+    description = "Характеризующие проверки TaskOrchestrator (стадии/переходы) — сеть безопасности перед расшивкой ChatState"
+    mainClass.set("com.example.adventdesktop.cli.TaskFlowCheckMainKt")
+    classpath = sourceSets["main"].runtimeClasspath
+    jvmArgs("-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8")
+}
+
 // День 30: fat-jar приватного LLM-сервиса (java -jar visa-llm-service-all.jar; настройки — через env).
 tasks.register<ShadowJar>("llmServiceJar") {
     group = "build"
