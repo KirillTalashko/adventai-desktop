@@ -1,0 +1,34 @@
+{
+  "_comment": "Baseline рефакторинга (Стадия 0 скилла refactor-architecture). База: main f87ab66. Каждый PR рефакторинга обязан двигать эти числа вниз (net-LOC не растёт, dup ↓, смелы ↓). Замеры воспроизводимы grep/wc; detekt+PMD CPD подключить, когда откроется Maven (сейчас offline).",
+  "base": "main f87ab66 (ветка refactor-phase-a-shrink)",
+  "totalLocKotlin": 13490,
+  "byLayer": {
+    "domain": 2057,
+    "domain/rag": 1177,
+    "data": 2573,
+    "ui": 4944,
+    "mcp": 1156,
+    "service": 244,
+    "cli": 1072
+  },
+  "godObject": {
+    "ui/ChatState.kt": { "loc": 1945, "mutableStateOf": 94, "functions": 116 },
+    "ui/App.kt": { "loc": 1849, "composables": 44 }
+  },
+  "duplication": {
+    "httpClientCtor": 10,
+    "jsonInstances": 20,
+    "dpLiteralsInUi": 305,
+    "alertDialogFramesInUi": 6,
+    "iconButtonWrappers": 5,
+    "panelMethodCopies": 23
+  },
+  "tools": {
+    "detekt": "не подключён (offline Maven Central)",
+    "pmdCpd": "не подключён (offline Maven Central)"
+  },
+  "gate": "net-LOC не вырос · duplication ↓ · LargeClass/LongMethod ↓ · чистый перенос строк при неизменном поведении — норма",
+  "progress": [
+    { "step": "A5 · IconActionButton", "change": "4 обёртки-кнопки (MCP/коннекторы/RAG/локальная LLM) → 1 атом", "appKtLoc": "1849 → 1812", "composables": "44 → 41", "deltaLoc": -37, "note": "SendButton оставлен — первичная кнопка, отдельная семантика" }
+  ]
+}

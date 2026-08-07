@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Close
@@ -421,10 +422,10 @@ private fun Composer(state: ChatState) {
                     AttachButton(state)
                     // Инженерные витрины (MCP/коннекторы) — только в режиме разработчика (Настройки).
                     if (state.config.developerMode) {
-                        McpButton(state)
-                        ConnectorsButton(state)
-                        RagButton(state)
-                        LocalLlmButton(state)
+                        IconActionButton(Icons.Filled.Extension, "Инструменты MCP", { state.connectMcp() }, enabled = !state.mcpConnecting, busy = state.mcpConnecting)
+                        IconActionButton(Icons.Filled.Tune, "Коннекторы агента", { state.openConnectors() })
+                        IconActionButton(Icons.Filled.Storage, "Индексация знаний (RAG)", { state.openRag() })
+                        IconActionButton(Icons.Filled.Memory, "Локальная LLM", { state.openLocalLlm() })
                     }
                     DropdownChip(state.model.title, Models.all, { it.title }) { state.chooseModel(it) }
                     // День 27 — визуальный маркер: выбрана локальная модель → чат работает без облака.
@@ -469,67 +470,29 @@ private fun SendButton(state: ChatState) {
     }
 }
 
-/** Кнопка MCP в композере (рядом с «+») — подключиться к MCP-серверу и показать список инструментов. */
+/**
+ * Атом UI-kit: круглая иконка-кнопка вторичного действия (surfaceVariant · 34.dp · акцентная иконка/спиннер).
+ * Сжимает 4 почти одинаковых кнопки композера (MCP/коннекторы/RAG/локальная LLM) в один параметризованный вызов.
+ * `SendButton` НЕ входит — он первичный (accent-фон, белая иконка, 38.dp): отдельная семантика, а не булев флаг.
+ */
 @Composable
-private fun McpButton(state: ChatState) {
+private fun IconActionButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    busy: Boolean = false,
+) {
     Surface(
-        onClick = { state.connectMcp() },
-        enabled = !state.mcpConnecting,
+        onClick = onClick,
+        enabled = enabled,
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surfaceVariant,
         modifier = Modifier.size(34.dp)
     ) {
         Box(contentAlignment = Alignment.Center) {
-            if (state.mcpConnecting) {
-                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
-            } else {
-                Icon(Icons.Filled.Extension, "Инструменты MCP", Modifier.size(20.dp), tint = AppColors.accent)
-            }
-        }
-    }
-}
-
-/** Кнопка «Коннекторы агента» (День 20): включить/выключить MCP и локальные навыки (Skill + CLI). */
-@Composable
-private fun ConnectorsButton(state: ChatState) {
-    Surface(
-        onClick = { state.openConnectors() },
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        modifier = Modifier.size(34.dp)
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(Icons.Filled.Tune, "Коннекторы агента", Modifier.size(20.dp), tint = AppColors.accent)
-        }
-    }
-}
-
-/** Кнопка «Индексация знаний (RAG)» (День 21) — открыть панель построения и сравнения индекса. */
-@Composable
-private fun RagButton(state: ChatState) {
-    Surface(
-        onClick = { state.openRag() },
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        modifier = Modifier.size(34.dp)
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(Icons.Filled.Storage, "Индексация знаний (RAG)", Modifier.size(20.dp), tint = AppColors.accent)
-        }
-    }
-}
-
-/** Кнопка «Локальная LLM» (Неделя 6, День 26) — открыть панель запуска локальной модели (Ollama). */
-@Composable
-private fun LocalLlmButton(state: ChatState) {
-    Surface(
-        onClick = { state.openLocalLlm() },
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        modifier = Modifier.size(34.dp)
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(Icons.Filled.Memory, "Локальная LLM", Modifier.size(20.dp), tint = AppColors.accent)
+            if (busy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+            else Icon(icon, contentDescription, Modifier.size(20.dp), tint = AppColors.accent)
         }
     }
 }
