@@ -153,6 +153,59 @@
 
 ---
 
+## 5b. Расшивка `ChatState` на держатели — прогресс и выверенный план RAG
+
+Ветка `refactor-phase-a-shrink`. Держатели выносятся по SRP (инъекция зависимостей конструктором, UI зовёт
+`state.holder.X`, поля-`mutableStateOf` переносятся дословно). `ChatState` 1945 → 1748 (−197), зон 12 → 10.
+
+| Держатель | Статус | Заметка |
+|---|---|---|
+| `ServicePanelState` | ✅ `eedd215` | самая чистая зона; инжект `scope` + `{ localLlm.localLlmPrompt }` |
+| `LocalLlmPanelState` | ✅ `520002f` | хаб; `setAvailableModels()` — явная точка кросс-записи из RAG |
+| **`RagPanelState`** | 📋 **план готов, НЕ исполнен** | самая связанная; см. ниже |
+
+### RagPanelState — план выноса (продукт Mikado-роя, критик: `proceedNow=True`)
+
+**Почему отложено:** это самый крупный и переплетённый вынос, а панель **нельзя GUI-проверить** (окно
+gradle-процесса не гранта́ется computer-use). Гейт диффа доказывает целостность *агент-RAG*, но не
+корректность самой панели. Исполнять — в сессии, где GUI-проверка панели возможна.
+
+**Граница (Option B).** RAG-зона делит с агентом единый индекс и эмбеддер — поэтому агент-общее **остаётся
+в `ChatState`**, а панель получает провайдеры:
+- **Остаётся** (агент/dev-docs): поле `knowledge` + `knowledge()`, `newEmbedder()`, `ragQueryEmbedder()`,
+  `ragUseOllama` + `chooseRagEmbedder()`, `AGENT_RAG_OPTIONS`, `OLLAMA_EMBEDDER_PREFIX`, сшивка
+  `rebuildAgent` (`RagKnowledgeRetriever(knowledge(), ::ragQueryEmbedder, AGENT_RAG_OPTIONS)`),
+  `renderRagSources`, `config.ragInAgentEnabled`/`setRagInAgentEnabled`.
+- **Уезжает** в `RagPanelState`: поля `ragOpen`/`ragBuilding`/`ragProgress`/`ragNote`/`ragComparison`/
+  `ragDocCount`/`ragQuery` + `ragAnswering`/`ragAnswer*`/`gold*`/`ragStrategy…ragFloor`/`ragTrace`/`ragVs*`/
+  `ragLocalModel`/`citation*`; методы `openRag`/`closeRag`/`buildIndex`/`ragOptions`/`ragCompare`/
+  `ragCompareLocalVsCloud`/`timeRagVs`/`askNegativeExample`/`runGoldAnswers`/`runGoldRetrieval`/
+  `runCitationEval`/`ragJob`/`toView`; вложенный `RagVsResult`.
+
+**7 инъекций конструктора:** `scope`, `knowledge: () -> KnowledgeIndex` (**`::knowledge` — та же ссылка, не
+копия**, иначе двойной `seedMissing` + рассинхрон векторов), `newEmbedder: () -> Embedder` (`::newEmbedder` —
+**разрывает цикл**: тумблер остаётся в ChatState), `useOllama: () -> Boolean` (`{ ragUseOllama }` — для
+подсказки в `buildIndex`), `gateway: () -> LlmGatewayClient?` (**нулабельный**, провайдер — `client`
+пересобирается), `config: () -> DesktopConfig` (провайдер), `localLlm: LocalLlmPanelState` (для
+`openRag → localLlm.setAvailableModels`). `val rag` объявить **строго после** `val localLlm`/`val service`.
+
+**Гейт безопасности (замена GUI для агент-RAG):** после выноса `git diff` по символам
+`knowledge`/`ragQueryEmbedder`/`newEmbedder`/`ragUseOllama`/`AGENT_RAG_OPTIONS`/`rebuildAgent:1723` обязан
+быть **пустым**. Плюс `compileKotlin` + `runTaskFlowCheck` 12/12.
+
+**Ловушки App.kt (37 точек, править ПРИЦЕЛЬНО, без глобального sed):**
+- коллизия: `state.ragInAgentEnabled`/`setRagInAgentEnabled` — **остаются** (коннектор), regex `state.rag→state.rag.rag` их испортит;
+- 7 методов **без** rag-префикса regex пропустит: `openRag`/`closeRag`/`buildIndex`/`askNegativeExample`/`runGoldRetrieval`/`runGoldAnswers`/`runCitationEval`;
+- `ChatState.RagVsResult` → `RagPanelState.RagVsResult` (вручную);
+- **не трогать** `state.ragUseOllama`/`state.chooseRagEmbedder` и `state.localLlm.localLlmModels`.
+
+**⚠️ Load-bearing инвариант — в KDoc `RagPanelState`:** `newEmbedder`/`ragUseOllama`/`chooseRagEmbedder`/
+`knowledge` оставлены в `ChatState` **намеренно** (init-order: `rebuildAgent` из `init` до конструирования
+`rag`; + общие с агентским `ragQueryEmbedder` и dev-docs `devReindex`/`devQueryEmbedder`). Будущая «доводка»,
+перенёсшая тумблер в панель, **вернёт init-order NPE**, который GUI-проверкой не ловится.
+
+---
+
 ## 6. Полная 13-модульная раскладка (ориентир на будущее, НЕ строить сейчас)
 
 Сохранена как destination strangler-fig'а, **если проект вырастет до нескольких разработчиков / независимых релизов фич**: `:core:domain`, `:core:data`, `:core:llm`, `:ui:kit`, `:feature:rag`, `:feature:mcp`, `:feature:local-llm`, `:feature:devassist`, `:feature:chat`, `:service:mcp-visa`, `:service:llm`, `:app:desktop`, `:app:cli`. Раскладка по оси «слой × фича» (Now in Android). Переходить к ней **по одному модулю**, только когда конкретная фича даст измеримую боль в текущей упаковке.
