@@ -146,7 +146,7 @@ fun App(state: ChatState) {
         if (state.mcpDialogOpen) McpToolsDialog(state)
         if (state.connectorsOpen) ConnectorsDialog(state)
         if (state.ragOpen) RagDialog(state)
-        if (state.localLlmOpen) LocalLlmDialog(state)
+        if (state.localLlm.localLlmOpen) LocalLlmDialog(state)
     }
 }
 
@@ -426,7 +426,7 @@ private fun Composer(state: ChatState) {
                         IconActionButton(Icons.Filled.Extension, "Инструменты MCP", { state.connectMcp() }, enabled = !state.mcpConnecting, busy = state.mcpConnecting)
                         IconActionButton(Icons.Filled.Tune, "Коннекторы агента", { state.openConnectors() })
                         IconActionButton(Icons.Filled.Storage, "Индексация знаний (RAG)", { state.openRag() })
-                        IconActionButton(Icons.Filled.Memory, "Локальная LLM", { state.openLocalLlm() })
+                        IconActionButton(Icons.Filled.Memory, "Локальная LLM", { state.localLlm.openLocalLlm() })
                     }
                     DropdownChip(state.model.title, Models.all, { it.title }) { state.chooseModel(it) }
                     // День 27 — визуальный маркер: выбрана локальная модель → чат работает без облака.
@@ -502,8 +502,8 @@ private fun IconActionButton(
 @Composable
 private fun LocalLlmDialog(state: ChatState) {
     AlertDialog(
-        onDismissRequest = { state.closeLocalLlm() },
-        confirmButton = { TextButton(onClick = { state.closeLocalLlm() }) { Text("Закрыть") } },
+        onDismissRequest = { state.localLlm.closeLocalLlm() },
+        confirmButton = { TextButton(onClick = { state.localLlm.closeLocalLlm() }) { Text("Закрыть") } },
         title = { Text("Локальная LLM (Ollama)") },
         text = {
             Column(
@@ -515,37 +515,37 @@ private fun LocalLlmDialog(state: ChatState) {
                         "без облака. Нужны запущенная «ollama serve» и «ollama pull <модель>».",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface
                 )
-                state.localLlmNote?.let {
+                state.localLlm.localLlmNote?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = AppColors.accent)
                 }
-                if (state.localLlmModels.isNotEmpty()) {
+                if (state.localLlm.localLlmModels.isNotEmpty()) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Модель:", style = MaterialTheme.typography.labelLarge)
-                        DropdownChip(state.localLlmModel, state.localLlmModels, { it }) { state.localLlmModel = it }
+                        DropdownChip(state.localLlm.localLlmModel, state.localLlm.localLlmModels, { it }) { state.localLlm.localLlmModel = it }
                     }
                 } else {
                     OutlinedTextField(
-                        value = state.localLlmModel, onValueChange = { state.localLlmModel = it },
+                        value = state.localLlm.localLlmModel, onValueChange = { state.localLlm.localLlmModel = it },
                         label = { Text("Модель Ollama (список пуст — впиши вручную)") }, singleLine = true, modifier = Modifier.fillMaxWidth()
                     )
                 }
                 OutlinedTextField(
-                    value = state.localLlmPrompt, onValueChange = { state.localLlmPrompt = it },
+                    value = state.localLlm.localLlmPrompt, onValueChange = { state.localLlm.localLlmPrompt = it },
                     label = { Text("Ваш запрос") }, maxLines = 4, modifier = Modifier.fillMaxWidth()
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
-                        onClick = { state.localLlmRunSamples() },
-                        enabled = !state.localLlmRunning,
+                        onClick = { state.localLlm.localLlmRunSamples() },
+                        enabled = !state.localLlm.localLlmRunning,
                         colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)
                     ) { Text("Прогнать 3 запроса") }
                     TextButton(
-                        onClick = { state.localLlmAsk() },
-                        enabled = !state.localLlmRunning && state.localLlmPrompt.isNotBlank()
+                        onClick = { state.localLlm.localLlmAsk() },
+                        enabled = !state.localLlm.localLlmRunning && state.localLlm.localLlmPrompt.isNotBlank()
                     ) { Text("Спросить своё") }
-                    if (state.localLlmRunning) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                    if (state.localLlm.localLlmRunning) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
                 }
-                state.localLlmResults.forEach { LocalLlmResultCard(it) }
+                state.localLlm.localLlmResults.forEach { LocalLlmResultCard(it) }
 
                 // === День 29 — оптимизация под задачу (до vs после) ===
                 HorizontalDivider()
@@ -557,24 +557,24 @@ private fun LocalLlmDialog(state: ChatState) {
                         "другой квант (напр. ollama pull qwen2.5:7b-instruct-q8_0), выберите его в «Модель» выше и прогоните снова.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                OutlinedTextField(value = state.optTask, onValueChange = { state.optTask = it }, label = { Text("Задача (запрос)") }, maxLines = 3, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = state.optSystem, onValueChange = { state.optSystem = it }, label = { Text("Промпт-шаблон «После» (под кейс)") }, maxLines = 10, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = state.localLlm.optTask, onValueChange = { state.localLlm.optTask = it }, label = { Text("Задача (запрос)") }, maxLines = 3, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = state.localLlm.optSystem, onValueChange = { state.localLlm.optSystem = it }, label = { Text("Промпт-шаблон «После» (под кейс)") }, maxLines = 10, modifier = Modifier.fillMaxWidth())
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Temp: %.2f".format(state.optTemperature), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Slider(value = state.optTemperature, onValueChange = { state.optTemperature = it }, valueRange = 0f..1f, modifier = Modifier.weight(1f))
+                    Text("Temp: %.2f".format(state.localLlm.optTemperature), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Slider(value = state.localLlm.optTemperature, onValueChange = { state.localLlm.optTemperature = it }, valueRange = 0f..1f, modifier = Modifier.weight(1f))
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = state.optMaxTokens, onValueChange = { state.optMaxTokens = it.filter(Char::isDigit) }, label = { Text("Max tokens") }, singleLine = true, modifier = Modifier.weight(1f))
-                    OutlinedTextField(value = state.optNumCtx, onValueChange = { state.optNumCtx = it.filter(Char::isDigit) }, label = { Text("Context window") }, singleLine = true, modifier = Modifier.weight(1f))
+                    OutlinedTextField(value = state.localLlm.optMaxTokens, onValueChange = { state.localLlm.optMaxTokens = it.filter(Char::isDigit) }, label = { Text("Max tokens") }, singleLine = true, modifier = Modifier.weight(1f))
+                    OutlinedTextField(value = state.localLlm.optNumCtx, onValueChange = { state.localLlm.optNumCtx = it.filter(Char::isDigit) }, label = { Text("Context window") }, singleLine = true, modifier = Modifier.weight(1f))
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(onClick = { state.optimizeCompare() }, enabled = !state.optRunning && state.optTask.isNotBlank(), colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)) { Text("Сравнить: до vs после") }
-                    if (state.optRunning) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                    Button(onClick = { state.localLlm.optimizeCompare() }, enabled = !state.localLlm.optRunning && state.localLlm.optTask.isNotBlank(), colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)) { Text("Сравнить: до vs после") }
+                    if (state.localLlm.optRunning) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
                 }
-                state.optBefore?.let { OptRunCard("До — общий промпт + дефолты", it, tuned = false) }
-                state.optAfter?.let { OptRunCard("После — шаблон под кейс + тюнинг", it, tuned = true) }
-                val optB = state.optBefore
-                val optA = state.optAfter
+                state.localLlm.optBefore?.let { OptRunCard("До — общий промпт + дефолты", it, tuned = false) }
+                state.localLlm.optAfter?.let { OptRunCard("После — шаблон под кейс + тюнинг", it, tuned = true) }
+                val optB = state.localLlm.optBefore
+                val optA = state.localLlm.optAfter
                 if (optB != null && optA != null) {
                     Surface(color = AppColors.accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -624,7 +624,7 @@ private fun LocalLlmDialog(state: ChatState) {
 
 /** Карточка одного ответа локальной LLM: сложность, промпт, ответ и метрики (задержка, токены). */
 @Composable
-private fun LocalLlmResultCard(r: ChatState.LocalLlmResult) {
+private fun LocalLlmResultCard(r: LocalLlmPanelState.LocalLlmResult) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
         shape = RoundedCornerShape(10.dp),
@@ -839,7 +839,7 @@ private fun RagDialog(state: ChatState) {
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Локальная модель:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    val localModels = state.localLlmModels.ifEmpty { listOf(state.ragLocalModel) }
+                    val localModels = state.localLlm.localLlmModels.ifEmpty { listOf(state.ragLocalModel) }
                     DropdownChip(state.ragLocalModel, localModels, { it }) { state.ragLocalModel = it }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
