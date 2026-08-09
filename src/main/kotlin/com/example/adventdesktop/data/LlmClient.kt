@@ -7,11 +7,7 @@ import com.example.adventdesktop.domain.Message
 import com.example.adventdesktop.domain.TokenUsage
 import com.example.adventdesktop.domain.Tool
 import com.example.adventdesktop.domain.ToolResult
-import io.ktor.client.HttpClient
 import io.ktor.client.call.body
-import io.ktor.client.engine.cio.CIO
-import io.ktor.client.plugins.HttpTimeout
-import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -21,7 +17,6 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
-import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -92,15 +87,8 @@ class LlmClient(private val config: LlmConfig) : LlmGatewayClient {
     // explicitNulls=false → не слать null-поля; encodeDefaults=true → слать поля с дефолтами
     // (иначе у tool-схем выпадает обязательное `type:"function"` → DeepSeek 400).
     private val json = Json { ignoreUnknownKeys = true; isLenient = true; explicitNulls = false; encodeDefaults = true }
-    private val http = HttpClient(CIO) {
-        install(ContentNegotiation) { json(json) }
-        install(HttpTimeout) {
-            requestTimeoutMillis = 120_000
-            connectTimeoutMillis = 30_000
-        }
-        // На сетях с локальным туннелем (прямой выход/DNS закрыты) ходим через прокси из настроек; иначе — прямо.
-        engine { HttpProxy.configOrNull()?.let { proxy = it } }
-    }
+    // Прокси из настроек — для сетей с локальным туннелем (прямой выход/DNS закрыты); иначе прямое соединение.
+    private val http = cioJsonClient(requestTimeoutMs = 120_000, connectTimeoutMs = 30_000, json = json, useProxy = true)
 
     override suspend fun complete(
         messages: List<Message>,

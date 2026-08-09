@@ -28,7 +28,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.material.icons.Icons
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Close
@@ -144,7 +146,7 @@ fun App(state: ChatState) {
         if (state.mcpDialogOpen) McpToolsDialog(state)
         if (state.connectorsOpen) ConnectorsDialog(state)
         if (state.ragOpen) RagDialog(state)
-        if (state.localLlmOpen) LocalLlmDialog(state)
+        if (state.localLlm.localLlmOpen) LocalLlmDialog(state)
     }
 }
 
@@ -421,10 +423,10 @@ private fun Composer(state: ChatState) {
                     AttachButton(state)
                     // Инженерные витрины (MCP/коннекторы) — только в режиме разработчика (Настройки).
                     if (state.config.developerMode) {
-                        McpButton(state)
-                        ConnectorsButton(state)
-                        RagButton(state)
-                        LocalLlmButton(state)
+                        IconActionButton(Icons.Filled.Extension, "Инструменты MCP", { state.connectMcp() }, enabled = !state.mcpConnecting, busy = state.mcpConnecting)
+                        IconActionButton(Icons.Filled.Tune, "Коннекторы агента", { state.openConnectors() })
+                        IconActionButton(Icons.Filled.Storage, "Индексация знаний (RAG)", { state.openRag() })
+                        IconActionButton(Icons.Filled.Memory, "Локальная LLM", { state.localLlm.openLocalLlm() })
                     }
                     DropdownChip(state.model.title, Models.all, { it.title }) { state.chooseModel(it) }
                     // День 27 — визуальный маркер: выбрана локальная модель → чат работает без облака.
@@ -469,67 +471,29 @@ private fun SendButton(state: ChatState) {
     }
 }
 
-/** Кнопка MCP в композере (рядом с «+») — подключиться к MCP-серверу и показать список инструментов. */
+/**
+ * Атом UI-kit: круглая иконка-кнопка вторичного действия (surfaceVariant · 34.dp · акцентная иконка/спиннер).
+ * Сжимает 4 почти одинаковых кнопки композера (MCP/коннекторы/RAG/локальная LLM) в один параметризованный вызов.
+ * `SendButton` НЕ входит — он первичный (accent-фон, белая иконка, 38.dp): отдельная семантика, а не булев флаг.
+ */
 @Composable
-private fun McpButton(state: ChatState) {
+private fun IconActionButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    busy: Boolean = false,
+) {
     Surface(
-        onClick = { state.connectMcp() },
-        enabled = !state.mcpConnecting,
+        onClick = onClick,
+        enabled = enabled,
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surfaceVariant,
         modifier = Modifier.size(34.dp)
     ) {
         Box(contentAlignment = Alignment.Center) {
-            if (state.mcpConnecting) {
-                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
-            } else {
-                Icon(Icons.Filled.Extension, "Инструменты MCP", Modifier.size(20.dp), tint = AppColors.accent)
-            }
-        }
-    }
-}
-
-/** Кнопка «Коннекторы агента» (День 20): включить/выключить MCP и локальные навыки (Skill + CLI). */
-@Composable
-private fun ConnectorsButton(state: ChatState) {
-    Surface(
-        onClick = { state.openConnectors() },
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        modifier = Modifier.size(34.dp)
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(Icons.Filled.Tune, "Коннекторы агента", Modifier.size(20.dp), tint = AppColors.accent)
-        }
-    }
-}
-
-/** Кнопка «Индексация знаний (RAG)» (День 21) — открыть панель построения и сравнения индекса. */
-@Composable
-private fun RagButton(state: ChatState) {
-    Surface(
-        onClick = { state.openRag() },
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        modifier = Modifier.size(34.dp)
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(Icons.Filled.Storage, "Индексация знаний (RAG)", Modifier.size(20.dp), tint = AppColors.accent)
-        }
-    }
-}
-
-/** Кнопка «Локальная LLM» (Неделя 6, День 26) — открыть панель запуска локальной модели (Ollama). */
-@Composable
-private fun LocalLlmButton(state: ChatState) {
-    Surface(
-        onClick = { state.openLocalLlm() },
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        modifier = Modifier.size(34.dp)
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(Icons.Filled.Memory, "Локальная LLM", Modifier.size(20.dp), tint = AppColors.accent)
+            if (busy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+            else Icon(icon, contentDescription, Modifier.size(20.dp), tint = AppColors.accent)
         }
     }
 }
@@ -538,8 +502,8 @@ private fun LocalLlmButton(state: ChatState) {
 @Composable
 private fun LocalLlmDialog(state: ChatState) {
     AlertDialog(
-        onDismissRequest = { state.closeLocalLlm() },
-        confirmButton = { TextButton(onClick = { state.closeLocalLlm() }) { Text("Закрыть") } },
+        onDismissRequest = { state.localLlm.closeLocalLlm() },
+        confirmButton = { TextButton(onClick = { state.localLlm.closeLocalLlm() }) { Text("Закрыть") } },
         title = { Text("Локальная LLM (Ollama)") },
         text = {
             Column(
@@ -551,37 +515,37 @@ private fun LocalLlmDialog(state: ChatState) {
                         "без облака. Нужны запущенная «ollama serve» и «ollama pull <модель>».",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface
                 )
-                state.localLlmNote?.let {
+                state.localLlm.localLlmNote?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = AppColors.accent)
                 }
-                if (state.localLlmModels.isNotEmpty()) {
+                if (state.localLlm.localLlmModels.isNotEmpty()) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Модель:", style = MaterialTheme.typography.labelLarge)
-                        DropdownChip(state.localLlmModel, state.localLlmModels, { it }) { state.localLlmModel = it }
+                        DropdownChip(state.localLlm.localLlmModel, state.localLlm.localLlmModels, { it }) { state.localLlm.localLlmModel = it }
                     }
                 } else {
                     OutlinedTextField(
-                        value = state.localLlmModel, onValueChange = { state.localLlmModel = it },
+                        value = state.localLlm.localLlmModel, onValueChange = { state.localLlm.localLlmModel = it },
                         label = { Text("Модель Ollama (список пуст — впиши вручную)") }, singleLine = true, modifier = Modifier.fillMaxWidth()
                     )
                 }
                 OutlinedTextField(
-                    value = state.localLlmPrompt, onValueChange = { state.localLlmPrompt = it },
+                    value = state.localLlm.localLlmPrompt, onValueChange = { state.localLlm.localLlmPrompt = it },
                     label = { Text("Ваш запрос") }, maxLines = 4, modifier = Modifier.fillMaxWidth()
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
-                        onClick = { state.localLlmRunSamples() },
-                        enabled = !state.localLlmRunning,
+                        onClick = { state.localLlm.localLlmRunSamples() },
+                        enabled = !state.localLlm.localLlmRunning,
                         colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)
                     ) { Text("Прогнать 3 запроса") }
                     TextButton(
-                        onClick = { state.localLlmAsk() },
-                        enabled = !state.localLlmRunning && state.localLlmPrompt.isNotBlank()
+                        onClick = { state.localLlm.localLlmAsk() },
+                        enabled = !state.localLlm.localLlmRunning && state.localLlm.localLlmPrompt.isNotBlank()
                     ) { Text("Спросить своё") }
-                    if (state.localLlmRunning) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                    if (state.localLlm.localLlmRunning) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
                 }
-                state.localLlmResults.forEach { LocalLlmResultCard(it) }
+                state.localLlm.localLlmResults.forEach { LocalLlmResultCard(it) }
 
                 // === День 29 — оптимизация под задачу (до vs после) ===
                 HorizontalDivider()
@@ -593,24 +557,24 @@ private fun LocalLlmDialog(state: ChatState) {
                         "другой квант (напр. ollama pull qwen2.5:7b-instruct-q8_0), выберите его в «Модель» выше и прогоните снова.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                OutlinedTextField(value = state.optTask, onValueChange = { state.optTask = it }, label = { Text("Задача (запрос)") }, maxLines = 3, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = state.optSystem, onValueChange = { state.optSystem = it }, label = { Text("Промпт-шаблон «После» (под кейс)") }, maxLines = 10, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = state.localLlm.optTask, onValueChange = { state.localLlm.optTask = it }, label = { Text("Задача (запрос)") }, maxLines = 3, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = state.localLlm.optSystem, onValueChange = { state.localLlm.optSystem = it }, label = { Text("Промпт-шаблон «После» (под кейс)") }, maxLines = 10, modifier = Modifier.fillMaxWidth())
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Temp: %.2f".format(state.optTemperature), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Slider(value = state.optTemperature, onValueChange = { state.optTemperature = it }, valueRange = 0f..1f, modifier = Modifier.weight(1f))
+                    Text("Temp: %.2f".format(state.localLlm.optTemperature), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Slider(value = state.localLlm.optTemperature, onValueChange = { state.localLlm.optTemperature = it }, valueRange = 0f..1f, modifier = Modifier.weight(1f))
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = state.optMaxTokens, onValueChange = { state.optMaxTokens = it.filter(Char::isDigit) }, label = { Text("Max tokens") }, singleLine = true, modifier = Modifier.weight(1f))
-                    OutlinedTextField(value = state.optNumCtx, onValueChange = { state.optNumCtx = it.filter(Char::isDigit) }, label = { Text("Context window") }, singleLine = true, modifier = Modifier.weight(1f))
+                    OutlinedTextField(value = state.localLlm.optMaxTokens, onValueChange = { state.localLlm.optMaxTokens = it.filter(Char::isDigit) }, label = { Text("Max tokens") }, singleLine = true, modifier = Modifier.weight(1f))
+                    OutlinedTextField(value = state.localLlm.optNumCtx, onValueChange = { state.localLlm.optNumCtx = it.filter(Char::isDigit) }, label = { Text("Context window") }, singleLine = true, modifier = Modifier.weight(1f))
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(onClick = { state.optimizeCompare() }, enabled = !state.optRunning && state.optTask.isNotBlank(), colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)) { Text("Сравнить: до vs после") }
-                    if (state.optRunning) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                    Button(onClick = { state.localLlm.optimizeCompare() }, enabled = !state.localLlm.optRunning && state.localLlm.optTask.isNotBlank(), colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)) { Text("Сравнить: до vs после") }
+                    if (state.localLlm.optRunning) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
                 }
-                state.optBefore?.let { OptRunCard("До — общий промпт + дефолты", it, tuned = false) }
-                state.optAfter?.let { OptRunCard("После — шаблон под кейс + тюнинг", it, tuned = true) }
-                val optB = state.optBefore
-                val optA = state.optAfter
+                state.localLlm.optBefore?.let { OptRunCard("До — общий промпт + дефолты", it, tuned = false) }
+                state.localLlm.optAfter?.let { OptRunCard("После — шаблон под кейс + тюнинг", it, tuned = true) }
+                val optB = state.localLlm.optBefore
+                val optA = state.localLlm.optAfter
                 if (optB != null && optA != null) {
                     Surface(color = AppColors.accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -631,25 +595,25 @@ private fun LocalLlmDialog(state: ChatState) {
                         "«Прогнать 3 вопроса» — батч по сети; «Нагрузка ×6» — лимиты (429 rate-limit / 503 занят).",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                OutlinedTextField(value = state.serviceUrl, onValueChange = { state.serviceUrl = it }, label = { Text("URL сервиса") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = state.serviceToken, onValueChange = { state.serviceToken = it }, label = { Text("Токен (LLM_AUTH_TOKEN, если задан)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = state.service.serviceUrl, onValueChange = { state.service.serviceUrl = it }, label = { Text("URL сервиса") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = state.service.serviceToken, onValueChange = { state.service.serviceToken = it }, label = { Text("Токен (LLM_AUTH_TOKEN, если задан)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { state.serviceHealth() }, enabled = !state.serviceRunning, colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)) { Text("GET /health") }
-                    Button(onClick = { state.serviceChat() }, enabled = !state.serviceRunning, colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)) { Text("POST /chat") }
-                    if (state.serviceRunning) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                    Button(onClick = { state.service.serviceHealth() }, enabled = !state.service.serviceRunning, colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)) { Text("GET /health") }
+                    Button(onClick = { state.service.serviceChat() }, enabled = !state.service.serviceRunning, colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)) { Text("POST /chat") }
+                    if (state.service.serviceRunning) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { state.serviceRunSamples() }, enabled = !state.serviceRunning, colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)) { Text("Прогнать 3 вопроса") }
-                    TextButton(onClick = { state.serviceBurst() }, enabled = !state.serviceRunning) { Text("Нагрузка ×6") }
+                    Button(onClick = { state.service.serviceRunSamples() }, enabled = !state.service.serviceRunning, colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)) { Text("Прогнать 3 вопроса") }
+                    TextButton(onClick = { state.service.serviceBurst() }, enabled = !state.service.serviceRunning) { Text("Нагрузка ×6") }
                 }
-                if (state.serviceLog.isNotEmpty()) {
+                if (state.service.serviceLog.isNotEmpty()) {
                     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                 Text("Ответы сервиса (свежие сверху):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                TextButton(onClick = { state.clearServiceLog() }) { Text("очистить", style = MaterialTheme.typography.labelSmall) }
+                                TextButton(onClick = { state.service.clearServiceLog() }) { Text("очистить", style = MaterialTheme.typography.labelSmall) }
                             }
-                            state.serviceLog.asReversed().forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface) }
+                            state.service.serviceLog.asReversed().forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface) }
                         }
                     }
                 }
@@ -660,7 +624,7 @@ private fun LocalLlmDialog(state: ChatState) {
 
 /** Карточка одного ответа локальной LLM: сложность, промпт, ответ и метрики (задержка, токены). */
 @Composable
-private fun LocalLlmResultCard(r: ChatState.LocalLlmResult) {
+private fun LocalLlmResultCard(r: LocalLlmPanelState.LocalLlmResult) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
         shape = RoundedCornerShape(10.dp),
@@ -691,15 +655,13 @@ private fun LocalLlmResultCard(r: ChatState.LocalLlmResult) {
 @Composable
 private fun OptRunCard(label: String, r: LocalRun, tuned: Boolean) {
     val accent = if (tuned) AppColors.accent else MaterialTheme.colorScheme.onSurfaceVariant
-    Surface(color = accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(label, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = accent)
-            Text(
-                "⏱ ${r.ms} мс · ${"%.0f".format(r.tokPerSec)} ток/с · вход ${r.promptTokens} / выход ${r.evalTokens} ток.",
-                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            ExpandableText(r.text, collapsedLines = 6)
-        }
+    ResultCard(color = accent) {
+        Text(label, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = accent)
+        Text(
+            "⏱ ${r.ms} мс · ${"%.0f".format(r.tokPerSec)} ток/с · вход ${r.promptTokens} / выход ${r.evalTokens} ток.",
+            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        ExpandableText(r.text, collapsedLines = 6)
     }
 }
 
@@ -877,7 +839,7 @@ private fun RagDialog(state: ChatState) {
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Локальная модель:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    val localModels = state.localLlmModels.ifEmpty { listOf(state.ragLocalModel) }
+                    val localModels = state.localLlm.localLlmModels.ifEmpty { listOf(state.ragLocalModel) }
                     DropdownChip(state.ragLocalModel, localModels, { it }) { state.ragLocalModel = it }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -923,18 +885,16 @@ private fun RagVsView(state: ChatState) {
 @Composable
 private fun RagVsCard(r: ChatState.RagVsResult, localCol: Boolean) {
     val accent = if (localCol) AppColors.accent else MaterialTheme.colorScheme.onSurfaceVariant
-    Surface(color = accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            val head = (if (localCol) "⚡ " else "☁ ") + r.label +
-                (r.answer?.let { " · ${r.ms} мс · ${it.usage?.total ?: 0} ток." } ?: "")
-            Text(head, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = accent)
-            when {
-                !r.available -> Text(r.error ?: "недоступно", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                r.error != null -> Text("Ошибка: ${r.error}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                r.answer != null -> {
-                    if (r.answer.abstained) Text("🚫 режим «не знаю» — контекст слабее порога", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
-                    ExpandableText(r.answer.text, collapsedLines = 6)
-                }
+    ResultCard(color = accent) {
+        val head = (if (localCol) "⚡ " else "☁ ") + r.label +
+            (r.answer?.let { " · ${r.ms} мс · ${it.usage?.total ?: 0} ток." } ?: "")
+        Text(head, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = accent)
+        when {
+            !r.available -> Text(r.error ?: "недоступно", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            r.error != null -> Text("Ошибка: ${r.error}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            r.answer != null -> {
+                if (r.answer.abstained) Text("🚫 режим «не знаю» — контекст слабее порога", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                ExpandableText(r.answer.text, collapsedLines = 6)
             }
         }
     }
@@ -1074,26 +1034,24 @@ private fun GoldRetrievalRow(r: GoldRetrieval) {
 @Composable
 private fun RagAnswerCard(a: RagAnswer, warn: Boolean, whatIs: String, note: String? = null) {
     val accent = if (warn) MaterialTheme.colorScheme.error else AppColors.accent
-    Surface(color = accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("${a.mode} — $whatIs", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = accent)
-            if (a.abstained) Text("🚫 режим «не знаю» — контекст слабее порога, ответ не выдумывается", fontWeight = FontWeight.Medium, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
-            note?.let { Text(it, fontWeight = FontWeight.Medium, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error) }
-            val toks = a.usage?.let { "${it.total} ток." } ?: "—"
-            val ctx = if (a.contextChars > 0) "контекст ${a.contextChars} симв." else "без контекста базы"
-            Text("$toks · $ctx", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            ExpandableText(a.text, collapsedLines = 6)
-            if (a.sources.isNotEmpty()) {
-                Text("Источники (файл › раздел · chunk_id):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                a.sources.forEach { s ->
-                    Text("[${s.n}] %.3f · %s › %s · %s".format(s.score, s.source, s.section, s.chunkId), style = MaterialTheme.typography.labelSmall, color = accent)
-                }
+    ResultCard(color = accent) {
+        Text("${a.mode} — $whatIs", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = accent)
+        if (a.abstained) Text("🚫 режим «не знаю» — контекст слабее порога, ответ не выдумывается", fontWeight = FontWeight.Medium, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+        note?.let { Text(it, fontWeight = FontWeight.Medium, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error) }
+        val toks = a.usage?.let { "${it.total} ток." } ?: "—"
+        val ctx = if (a.contextChars > 0) "контекст ${a.contextChars} симв." else "без контекста базы"
+        Text("$toks · $ctx", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        ExpandableText(a.text, collapsedLines = 6)
+        if (a.sources.isNotEmpty()) {
+            Text("Источники (файл › раздел · chunk_id):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            a.sources.forEach { s ->
+                Text("[${s.n}] %.3f · %s › %s · %s".format(s.score, s.source, s.section, s.chunkId), style = MaterialTheme.typography.labelSmall, color = accent)
             }
-            if (a.citations.isNotEmpty()) {
-                Text("Цитаты (дословно из источников):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                a.citations.forEach { c ->
-                    Text("[${c.n}] «${c.quote}»", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
-                }
+        }
+        if (a.citations.isNotEmpty()) {
+            Text("Цитаты (дословно из источников):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            a.citations.forEach { c ->
+                Text("[${c.n}] «${c.quote}»", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
             }
         }
     }
@@ -1298,17 +1256,31 @@ private fun InstalledSkillRow(title: String, subtitle: String) {
     }
 }
 
+/**
+ * Атом UI-kit: рамка карточки результата (accent-подложка · Radii.xs · во всю ширину · Column padding 10/spacing 4).
+ * Сводит 4 карточки (Opt/Connector/RagVs/RagAnswer); `color`/`alpha` параметризованы (у части — условный accent).
+ * `LocalLlmResultCard` НЕ входит — у него другой каркас (surfaceVariant, 10.dp), это не флаг атома.
+ */
+@Composable
+private fun ResultCard(
+    color: Color = AppColors.accent,
+    alpha: Float = 0.08f,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Surface(color = color.copy(alpha = alpha), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp), content = content)
+    }
+}
+
 /** Результат одного прогона коннектора (MCP/Skill): токены, след вызовов и ответ. */
 @Composable
 private fun ConnectorResultView(label: String, run: ConnectorRun?) {
     if (run == null) return
-    Surface(color = AppColors.accent.copy(alpha = 0.06f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            val toks = run.usage?.let { "prompt ${it.prompt} · total ${it.total}" } ?: "—"
-            Text("$label · токены: $toks", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
-            run.steps.forEach { Text(it.title, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            ExpandableText(run.reply, collapsedLines = 5)
-        }
+    ResultCard(alpha = 0.06f) {
+        val toks = run.usage?.let { "prompt ${it.prompt} · total ${it.total}" } ?: "—"
+        Text("$label · токены: $toks", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
+        run.steps.forEach { Text(it.title, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        ExpandableText(run.reply, collapsedLines = 5)
     }
 }
 

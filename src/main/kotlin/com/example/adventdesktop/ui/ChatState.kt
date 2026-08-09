@@ -13,13 +13,6 @@ import com.example.adventdesktop.data.InvariantStore
 import com.example.adventdesktop.data.LlmClient
 import com.example.adventdesktop.data.LlmGatewayClient
 import com.example.adventdesktop.data.LocalLlmClient
-import com.example.adventdesktop.data.LOCAL_LLM_SAMPLES
-import com.example.adventdesktop.data.LOCAL_LLM_SYSTEM
-import com.example.adventdesktop.data.LocalRun
-import com.example.adventdesktop.data.LlmServiceClient
-import com.example.adventdesktop.data.LocalTuning
-import com.example.adventdesktop.data.OPT_TASK_PROMPT
-import com.example.adventdesktop.data.LlmSample
 import com.example.adventdesktop.data.fetchOllamaModels
 import com.example.adventdesktop.data.ModelOption
 import com.example.adventdesktop.data.Models
@@ -81,7 +74,6 @@ import com.example.adventdesktop.domain.transitionTo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -989,7 +981,7 @@ class ChatState(
         // День 28 — установленные Ollama-модели для выбора локальной модели в сравнении (эмбеддеры отфильтрованы).
         scope.launch {
             val m = fetchOllamaModels()
-            localLlmModels = m
+            localLlm.setAvailableModels(m)   // RAG переиспользует список моделей панели «Локальная LLM»
             if (ragLocalModel !in m && m.isNotEmpty()) ragLocalModel = m.first()
         }
     }
@@ -1037,209 +1029,29 @@ class ChatState(
     )
 
     // --- Неделя 6, День 26: локальная LLM (Ollama) — dev-панель «Локальная LLM» ---
+    // --- Неделя 6, День 26: панель «Локальная LLM» вынесена в LocalLlmPanelState (расшивка god-object) ---
+    /** Держатель dev-панели локальной LLM (Ollama) + A/B-оптимизация. Список моделей переиспользует панель RAG. */
+    val localLlm = LocalLlmPanelState(scope)
 
-    /** Результат одного запроса к локальной LLM (для панели): метка, промпт, ответ/ошибка, задержка, токены. */
-    data class LocalLlmResult(
-        val level: String,
-        val prompt: String,
-        val answer: String,
-        val ms: Long,
-        val promptTokens: Int,
-        val completionTokens: Int,
-        val totalTokens: Int,
-        val error: Boolean = false,
-    )
-
-    var localLlmOpen by mutableStateOf(false)
-        private set
-    var localLlmModel by mutableStateOf(LocalLlmClient.DEFAULT_MODEL)
-    /** Установленные в Ollama модели (для выпадашки выбора); заполняется при открытии панели. */
-    var localLlmModels by mutableStateOf<List<String>>(emptyList())
-        private set
-    var localLlmPrompt by mutableStateOf("Кратко: что такое шенгенская виза?")
-    var localLlmRunning by mutableStateOf(false)
-        private set
-    var localLlmNote by mutableStateOf<String?>(null)
-        private set
-    var localLlmResults by mutableStateOf<List<LocalLlmResult>>(emptyList())
-        private set
-
-    fun openLocalLlm() {
-        localLlmOpen = true
-        scope.launch {
-            val models = fetchOllamaModels()
-            localLlmModels = models
-            if (localLlmModel !in models && models.isNotEmpty()) localLlmModel = models.first()
-        }
-    }
-    fun closeLocalLlm() { localLlmOpen = false }
-
-    /** Один запрос к локальной LLM из поля ввода панели. */
-    fun localLlmAsk() {
-        val prompt = localLlmPrompt.trim()
-        if (prompt.isEmpty() || localLlmRunning) return
-        runLocalLlm(listOf(LlmSample("свой запрос", prompt)))
-    }
-
-    /** Прогнать 3 контрольных запроса разной сложности ([LOCAL_LLM_SAMPLES]). */
-    fun localLlmRunSamples() {
-        if (localLlmRunning) return
-        runLocalLlm(LOCAL_LLM_SAMPLES)
-    }
-
-    private fun runLocalLlm(samples: List<LlmSample>) {
-        localLlmRunning = true
-        localLlmNote = null
-        localLlmResults = emptyList()
-        val model = localLlmModel.trim().ifBlank { LocalLlmClient.DEFAULT_MODEL }
-        scope.launch {
-            val client = LocalLlmClient(model = model)
-            val acc = mutableListOf<LocalLlmResult>()
-            for (s in samples) {
-                val start = System.currentTimeMillis()
-                val r = runCatchingCancellable {
-                    client.complete(
-                        listOf(Message(Role.System, LOCAL_LLM_SYSTEM), Message(Role.User, s.prompt)),
-                        params = LlmParams(temperature = 0.3),
-                    )
-                }
-                val ms = System.currentTimeMillis() - start
-                r.onSuccess { resp ->
-                    val u = resp.usage
-                    acc.add(LocalLlmResult(s.level, s.prompt, resp.text, ms, u?.prompt ?: 0, u?.completion ?: 0, u?.total ?: 0))
-                }.onFailure { e ->
-                    acc.add(LocalLlmResult(s.level, s.prompt, e.message ?: "ошибка", ms, 0, 0, 0, error = true))
-                }
-                localLlmResults = acc.toList()   // прогрессивно показываем по мере ответов
-            }
-            runCatchingCancellable { client.close() }
-            if (acc.isNotEmpty() && acc.all { it.error }) {
-                localLlmNote = "Локальная модель недоступна. Запусти `ollama serve` и `ollama pull $model`."
-            }
-            localLlmRunning = false
-        }
-    }
-
-    // --- День 29: оптимизация локальной модели под задачу (A/B «до vs после») ---
-
-    var optRunning by mutableStateOf(false)
-        private set
-    var optBefore by mutableStateOf<LocalRun?>(null)
-        private set
-    var optAfter by mutableStateOf<LocalRun?>(null)
-        private set
-    var optModel by mutableStateOf(LocalLlmClient.DEFAULT_MODEL)
-    var optTask by mutableStateOf(
-        "Гражданин РФ едет в Германию на 7 дней с целью туризма. Какие ключевые документы нужны на шенгенскую визу?"
-    )
-    var optSystem by mutableStateOf(OPT_TASK_PROMPT)
-    var optTemperature by mutableStateOf(0.2f)
-    var optMaxTokens by mutableStateOf("256")
-    var optNumCtx by mutableStateOf("4096")
+    // --- День 30: панель «Обращение к сервису по HTTP» вынесена в ServicePanelState (расшивка god-object) ---
+    /** Держатель dev-панели HTTP-сервиса (первый срез из ChatState по SRP). Промпт `/chat` — из панели «Локальная LLM». */
+    val service = ServicePanelState(scope) { localLlm.localLlmPrompt }
 
     /**
-     * День 29 — A/B «до vs после оптимизации» на одной задаче: baseline (общий промпт + дефолты Ollama) против
-     * tuned (задачный промпт-шаблон + temperature/max tokens/context window). Модель/квант — [optModel] (общая;
-     * смени её и прогони снова, чтобы сравнить кванты). Метрики: задержка, токены, throughput (ток/с).
+     * Общий каркас async-прогона RAG-панели: `launch` → [newEmbedder] → [block] → закрыть эмбеддер → [onDone].
+     * Сводит 5 копий одного скелета (ragCompare / ragCompareLocalVsCloud / runGoldAnswers / runGoldRetrieval /
+     * runCitationEval). Guard (`if (running) return`), взвод флага и сброс полей — в самом методе (различны);
+     * [block] сам решает onSuccess/onFailure. Закрытие эмбеддера теперь в ОДНОМ месте (было 5 копий — там же
+     * чинилась «утечка при исключении»).
      */
-    fun optimizeCompare() {
-        val task = optTask.trim()
-        if (task.isEmpty() || optRunning) return
-        optRunning = true
-        localLlmNote = null
-        optBefore = null
-        optAfter = null
+    private fun ragJob(onDone: () -> Unit, block: suspend (Embedder) -> Unit) {
         scope.launch {
-            val client = LocalLlmClient()
-            runCatchingCancellable {
-                optBefore = client.runTuned(task, LocalTuning(model = optModel))   // baseline: общий промпт + дефолты
-                optAfter = client.runTuned(                                        // tuned: задачный шаблон + ручки
-                    task,
-                    LocalTuning(
-                        model = optModel, system = optSystem,
-                        temperature = optTemperature.toDouble(),
-                        numPredict = optMaxTokens.toIntOrNull(),
-                        numCtx = optNumCtx.toIntOrNull(),
-                    ),
-                )
-            }.onFailure { localLlmNote = "Ошибка оптимизации: ${it.message}" }
-            runCatchingCancellable { client.close() }
-            optRunning = false
+            val emb = newEmbedder()
+            block(emb)
+            (emb as? OllamaEmbedder)?.close()
+            onDone()
         }
     }
-
-    // --- День 30: обращение к приватному LLM-сервису по HTTP (dev-панель — демонстрация сетевого доступа) ---
-
-    var serviceUrl by mutableStateOf("http://127.0.0.1:3002")
-    var serviceToken by mutableStateOf("")
-    var serviceRunning by mutableStateOf(false)
-        private set
-    var serviceLog by mutableStateOf<List<String>>(emptyList())
-        private set
-
-    fun clearServiceLog() { serviceLog = emptyList() }
-
-    /** `GET /health` — показать, что приватный сервис доступен по сети. */
-    fun serviceHealth() = serviceCall { c ->
-        val r = c.health()
-        "GET /health → ${r.status} · ${r.body} (${r.ms} мс)"
-    }
-
-    /** `POST /chat` — отправить запрос локальной модели по сети через сервис. */
-    fun serviceChat() = serviceCall { c ->
-        val prompt = localLlmPrompt.ifBlank { "Что такое шенгенская виза? Одним предложением." }
-        val r = c.chat(prompt)
-        "POST /chat → ${r.status} · ${r.body.take(300)} (${r.ms} мс)" + auth401(r.status)
-    }
-
-    /** Прогнать 3 контрольных вопроса через сервис по сети — модель на сервисе отвечает по одному. */
-    fun serviceRunSamples() {
-        if (serviceRunning) return
-        serviceRunning = true
-        scope.launch {
-            val c = LlmServiceClient(serviceUrl, serviceToken.ifBlank { null })
-            for (s in LOCAL_LLM_SAMPLES) {
-                val line = runCatchingCancellable {
-                    val r = c.chat(s.prompt)
-                    "[${s.level}] ${r.status} · ${r.body.take(280)} (${r.ms} мс)" + auth401(r.status)
-                }.getOrElse { "[${s.level}] ошибка: ${it.message}" }
-                serviceLog = serviceLog + line
-            }
-            runCatchingCancellable { c.close() }
-            serviceRunning = false
-        }
-    }
-
-    /** Всплеск: 6 параллельных запросов — наглядно про лимиты (429 rate-limit / 503 занят). */
-    fun serviceBurst() {
-        if (serviceRunning) return
-        serviceRunning = true
-        scope.launch {
-            val c = LlmServiceClient(serviceUrl, serviceToken.ifBlank { null })
-            val codes = runCatchingCancellable {
-                (1..6).map { i -> async { c.chat("Документ №$i на визу, одной строкой.").status } }.awaitAll()
-            }.getOrElse { emptyList() }
-            val tally = codes.groupingBy { it }.eachCount()
-            serviceLog = serviceLog + "Нагрузка ×6 → коды: $tally  (200 ответ · 429 rate-limit · 503 занят)"
-            runCatchingCancellable { c.close() }
-            serviceRunning = false
-        }
-    }
-
-    private fun serviceCall(block: suspend (LlmServiceClient) -> String) {
-        if (serviceRunning) return
-        serviceRunning = true
-        scope.launch {
-            val c = LlmServiceClient(serviceUrl, serviceToken.ifBlank { null })
-            val line = runCatchingCancellable { block(c) }.getOrElse { "ошибка: ${it.message}" }
-            serviceLog = serviceLog + line
-            runCatchingCancellable { c.close() }
-            serviceRunning = false
-        }
-    }
-
-    /** Дружелюбная подсказка при 401 (частая причина — токен в поле не совпал с LLM_AUTH_TOKEN сервиса). */
-    private fun auth401(status: Int): String = if (status == 401) "  ⚠ токен в поле ≠ LLM_AUTH_TOKEN сервиса" else ""
 
     // --- День 22: RAG-ответ (два режима: с RAG / без) + контрольный набор из 10 вопросов ---
 
@@ -1285,8 +1097,7 @@ class ChatState(
         ragAnswerRag = null
         ragAnswerPlain = null
         ragTrace = null
-        scope.launch {
-            val emb = newEmbedder()
+        ragJob({ ragAnswering = false }) { emb ->
             runCatchingCancellable {
                 val k = knowledge()
                 ragAnswerPlain = k.answer(gw, emb, q, useRag = false)          // без RAG — из общих знаний модели
@@ -1294,8 +1105,6 @@ class ChatState(
                 ragAnswerRag = ans
                 ragTrace = trace
             }.onFailure { ragNote = "Ошибка ответа: ${it.message}" }
-            (emb as? OllamaEmbedder)?.close()
-            ragAnswering = false
         }
     }
 
@@ -1328,8 +1137,7 @@ class ChatState(
         val q = ragQuery.trim()
         if (q.isEmpty() || ragVsRunning) return
         ragVsRunning = true; ragNote = null; ragVsLocal = null; ragVsCloud = null
-        scope.launch {
-            val emb = newEmbedder()
+        ragJob({ ragVsRunning = false }) { emb ->
             val localGw = LocalLlmClient(model = ragLocalModel)
             val cloudGw = resolveLlmConfig(Models.byId("deepseek-chat"), config)?.let { LlmClient(it) }
             runCatchingCancellable {
@@ -1341,8 +1149,6 @@ class ChatState(
             }.onFailure { ragNote = "Ошибка сравнения: ${it.message}" }
             runCatchingCancellable { localGw.close() }
             runCatchingCancellable { cloudGw?.close() }
-            (emb as? OllamaEmbedder)?.close()
-            ragVsRunning = false
         }
     }
 
@@ -1370,14 +1176,11 @@ class ChatState(
         ragNote = null
         goldAnswers = emptyList()
         goldProgress = "Подготовка…"
-        scope.launch {
-            val emb = newEmbedder()
+        ragJob({ goldRunning = false }) { emb ->
             runCatchingCancellable {
                 knowledge().goldAnswers(gw, emb, ragOptions()) { i, n -> goldProgress = "вопрос $i/$n" }
             }.onSuccess { goldAnswers = it; goldProgress = "" }
                 .onFailure { ragNote = "Ошибка прогона набора: ${it.message}"; goldProgress = "" }
-            (emb as? OllamaEmbedder)?.close()
-            goldRunning = false
         }
     }
 
@@ -1391,14 +1194,11 @@ class ChatState(
         ragNote = null
         goldRetrieval = emptyList()
         goldRetrievalProgress = "Подготовка…"
-        scope.launch {
-            val emb = newEmbedder()
+        ragJob({ goldRetrievalRunning = false }) { emb ->
             runCatchingCancellable {
                 knowledge().goldRetrieval(client, emb, ragOptions()) { i, n -> goldRetrievalProgress = "вопрос $i/$n" }
             }.onSuccess { goldRetrieval = it; goldRetrievalProgress = "" }
                 .onFailure { ragNote = "Ошибка сравнения поиска: ${it.message}"; goldRetrievalProgress = "" }
-            (emb as? OllamaEmbedder)?.close()
-            goldRetrievalRunning = false
         }
     }
 
@@ -1419,14 +1219,11 @@ class ChatState(
         ragNote = null
         citationChecks = emptyList()
         citationEvalProgress = "Подготовка…"
-        scope.launch {
-            val emb = newEmbedder()
+        ragJob({ citationEvalRunning = false }) { emb ->
             runCatchingCancellable {
                 knowledge().citationEval(gw, emb, ragOptions()) { i, n -> citationEvalProgress = "вопрос $i/$n" }
             }.onSuccess { citationChecks = it; citationEvalProgress = "" }
                 .onFailure { ragNote = "Ошибка проверки цитат: ${it.message}"; citationEvalProgress = "" }
-            (emb as? OllamaEmbedder)?.close()
-            citationEvalRunning = false
         }
     }
 
