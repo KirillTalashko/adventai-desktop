@@ -82,6 +82,12 @@ class LocalLlmClient(
     // Генерация 7B на CPU медленная — даём большой запас; коннект к localhost — быстрый.
     private val http = cioJsonClient(requestTimeoutMs = 300_000, connectTimeoutMs = 5_000, json = json)
 
+    /**
+     * Нативный `/api/chat` Ollama tool-loop здесь НЕ ведём (День 26) → честно объявляем `false`. Так оркестратор
+     * не отдаёт нам MCP-инструменты, которые мы бы всё равно молча уронили (устраняет тихий LSP-разрыв [complete]).
+     */
+    override val supportsTools = false
+
     override suspend fun complete(
         messages: List<Message>,
         tools: List<Tool>,

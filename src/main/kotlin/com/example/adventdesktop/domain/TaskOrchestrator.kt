@@ -469,7 +469,9 @@ class TaskOrchestrator(
         // Тулы пайплайна (День 19, visa_search/visa_summarize/save_report) — НЕ для основного агента: у него
         // есть get_visa_requirements (богатый research). Их использует только демо-пайплайн «Инструменты MCP».
         val gw = tools
-        val toolList = if (useTools && gw != null)
+        // supportsTools: не даём инструменты шлюзу, который tool-loop не ведёт (локальная модель) — иначе он их
+        // молча уронит (LSP). Тогда toolList пуст → executeTool=null → модель отвечает честно без инструментов.
+        val toolList = if (useTools && gw != null && gateway.supportsTools)
             runCatchingCancellable { gw.listTools() }.getOrDefault(emptyList()).filterNot { it.name in PIPELINE_TOOLS }
         else emptyList()
         val executeTool: (suspend (String, String) -> String)? =

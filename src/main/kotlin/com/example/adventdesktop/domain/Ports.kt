@@ -48,6 +48,15 @@ interface LlmGateway {
         params: LlmParams = LlmParams(),
         executeTool: (suspend (name: String, argsJson: String) -> String)? = null,
     ): GatewayResponse
+
+    /**
+     * Ведёт ли реализация tool-loop (День 17). `true` — модели можно дать [Tool]-схемы, и она умеет вызвать их
+     * через `executeTool`; `false` — реализация инструменты НЕ исполняет (напр. локальная Ollama на `/api/chat`).
+     * Оркестратор ОБЯЗАН проверять флаг и не передавать инструменты в шлюз с `false`. Иначе — молчаливый LSP-разрыв:
+     * жирный [complete] принимает `tools`, но часть реализаций их игнорирует без ошибки (локальная модель при
+     * включённом MCP теряет инструменты, ответ тихо строится без свежих данных/ссылок).
+     */
+    val supportsTools: Boolean get() = true
 }
 
 /**
