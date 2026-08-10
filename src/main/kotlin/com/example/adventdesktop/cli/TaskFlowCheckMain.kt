@@ -13,6 +13,7 @@ import com.example.adventdesktop.domain.TaskState
 import com.example.adventdesktop.domain.TaskStep
 import com.example.adventdesktop.domain.TokenUsage
 import com.example.adventdesktop.domain.Tool
+import com.example.adventdesktop.domain.ToolGateway
 import kotlinx.coroutines.runBlocking
 import kotlin.system.exitProcess
 
@@ -44,6 +45,35 @@ private class ScriptGateway(private val reply: (system: String, user: String) ->
 /** Скрипт: «писарь досье» (извлечение) → ничего не извлекает (досье не меняется); иначе — [stageReply]. */
 private fun script(stageReply: String) = ScriptGateway { system, _ ->
     if (system.contains("писарь")) "" else stageReply
+}
+
+/**
+ * Шлюз, ЗАПОМИНАЮЩИЙ сколько инструментов получил СТАДИЙНЫЙ вызов (не «писарь»-извлечение) — для проверки
+ * ISP/LSP-фикса `supportsTools`: поддерживающий шлюз должен получить инструменты, не поддерживающий — ноль.
+ */
+private class RecordingGateway(override val supportsTools: Boolean) : LlmGateway {
+    var lastToolCount = -1
+        private set
+
+    override suspend fun complete(
+        messages: List<Message>,
+        tools: List<Tool>,
+        params: LlmParams,
+        executeTool: (suspend (String, String) -> String)?,
+    ): GatewayResponse {
+        val sys = messages.firstOrNull { it.role == Role.System }?.text.orEmpty()
+        if (!sys.contains("писарь")) lastToolCount = tools.size
+        return GatewayResponse(if (sys.contains("писарь")) "" else "[SIMPLE] ok", TokenUsage(1, 1, 2))
+    }
+}
+
+/** Стаб MCP: один инструмент, чтобы оркестратору было что «дать» модели. */
+private object StubTools : ToolGateway {
+    override suspend fun connect() {}
+    override suspend fun listTools(): List<Tool> = listOf(Tool("get_visa_requirements", "тест", null))
+    override suspend fun callTool(name: String, arguments: Map<String, Any?>): String = ""
+    override suspend fun callToolJson(name: String, argumentsJson: String): String = ""
+    override suspend fun close() {}
 }
 
 private val FULL_CASE = CaseFile(
@@ -119,6 +149,24 @@ fun main() {
         val s = step(script("[STEP_RESULT] шаг один готов"), ctx, "дальше")
         check(s.context.step == 1, "step продвинулся 0 → 1")
         check(s.context.state == TaskState.EXECUTION, "остаёмся в EXECUTION (есть ещё шаги)")
+    }
+
+    // 6) ISP/LSP: инструменты уходят в шлюз, КОТОРЫЙ ведёт tool-loop (supportsTools=true).
+    println("\n[6] ISP · tools → шлюз supportsTools=true ПОЛУЧАЕТ инструменты")
+    run {
+        val gw = RecordingGateway(supportsTools = true)
+        val orch = TaskOrchestrator(gateway = gw, tools = StubTools, retriever = null)
+        runBlocking { orch.intake(TaskContext(), listOf(Message(Role.User, "привет")), profile = null) }
+        check(gw.lastToolCount > 0, "поддерживающий шлюз получил инструменты (${gw.lastToolCount})")
+    }
+
+    // 7) ISP/LSP-ФИКС: инструменты НЕ уходят в шлюз без tool-loop (локальная модель) — конец молчаливому сбросу.
+    println("\n[7] ISP · tools ✕ шлюз supportsTools=false инструментов НЕ получает (ФИКС)")
+    run {
+        val gw = RecordingGateway(supportsTools = false)
+        val orch = TaskOrchestrator(gateway = gw, tools = StubTools, retriever = null)
+        runBlocking { orch.intake(TaskContext(), listOf(Message(Role.User, "привет")), profile = null) }
+        check(gw.lastToolCount == 0, "шлюз без поддержки инструментов НЕ получил их (${gw.lastToolCount})")
     }
 
     println(if (failed == 0) "\nВСЕ ХАРАКТЕРИЗУЮЩИЕ ПРОВЕРКИ ПРОЙДЕНЫ." else "\nПРОВАЛОВ: $failed")
