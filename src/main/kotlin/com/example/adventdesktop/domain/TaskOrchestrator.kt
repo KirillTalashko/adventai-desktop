@@ -295,15 +295,22 @@ class TaskOrchestrator(
 
     /** Применить вердикт (pass/revise) к автомату — общая логика для одиночного валидатора и консилиума. */
     private fun applyVerdict(ctx: TaskContext, verdict: String, displayText: String, usage: TokenUsage?): TaskStep {
+        // Толерантный разбор вердикта: допускаем обёртку модели (`**[VERDICT]** pass`, `[VERDICT]: pass`, markdown) —
+        // ведущие не-словесные символы игнорируем (`^\W*`). Раньше жёсткий startsWith → любая обёртка или дрейф
+        // формата локальной модели уводили в else-ветку `ctx`, и задача ТИХО зависала в VALIDATION без прогресса
+        // и без ошибки (Bug: kotlin-diagnostics).
+        val isPass = Regex("""^\W*pass\b""").containsMatchIn(verdict.lowercase())
         val feedback = verdict.substringAfter(':', "").trim()
+        val nudge = "Проверка без однозначного вердикта — заверши строкой «[VERDICT] pass» или «[VERDICT] revise: <что исправить>»."
         val next = when {
-            verdict.startsWith("pass", ignoreCase = true) -> ctx.copy(note = "").transitionTo(TaskState.DONE)
-            // revise — только пока не превышен лимит; иначе завершаем с пометкой (без бесконечного переисполнения).
-            verdict.startsWith("revise", ignoreCase = true) && ctx.revises < MAX_REVISES ->
-                ctx.copy(step = 0, done = emptyList(), note = feedback, revises = ctx.revises + 1, awaiting = Awaiting.NONE)
+            isPass -> ctx.copy(note = "").transitionTo(TaskState.DONE)
+            // Любой НЕ-pass (revise ИЛИ непарсящийся мусор) → доработка, пока не превышен лимит. Безопасный
+            // дефолт: непарсящийся вердикт НЕ завершаем DONE молча (это скрыло бы плохой результат) и НЕ
+            // оставляем висеть в VALIDATION — ещё круг с явным фидбеком; MAX_REVISES гарантирует завершение.
+            ctx.revises < MAX_REVISES ->
+                ctx.copy(step = 0, done = emptyList(), note = feedback.ifBlank { nudge }, revises = ctx.revises + 1, awaiting = Awaiting.NONE)
                     .transitionTo(TaskState.EXECUTION)
-            verdict.startsWith("revise", ignoreCase = true) -> ctx.copy(note = feedback).transitionTo(TaskState.DONE)
-            else -> ctx
+            else -> ctx.copy(note = feedback.ifBlank { nudge }).transitionTo(TaskState.DONE)
         }
         return TaskStep(AgentReply(displayText, usage), next)
     }

@@ -194,6 +194,28 @@ fun main() {
         check(s.context.done.any { it.contains("загранпаспорт") }, "в [Сделано] реальный текст, не «шаг N выполнен»")
     }
 
+    // 10) Bug-fix (kotlin-diagnostics): VALIDATION с обёрнутым вердиктом (markdown) — распознаётся, не зависает.
+    println("\n[10] VALIDATION · «**[VERDICT]** pass» → DONE (толерантный разбор, не завис)")
+    run {
+        val ctx = TaskContext(
+            task = "виза", state = TaskState.VALIDATION, approach = "самостоятельно",
+            plan = listOf("Шаг"), step = 1, caseFile = FULL_CASE, done = listOf("Шаг 1: собрал пакет"),
+        )
+        val s = step(script("Всё корректно. **[VERDICT]** pass"), ctx, "проверь")
+        check(s.context.state == TaskState.DONE, "обёрнутый pass распознан → DONE (было: else->ctx, зависание)")
+    }
+
+    // 11) VALIDATION с непарсящимся вердиктом → НЕ зависаем молча в VALIDATION (безопасный дефолт — доработка).
+    println("\n[11] VALIDATION · непарсящийся вердикт → НЕ зависает в VALIDATION")
+    run {
+        val ctx = TaskContext(
+            task = "виза", state = TaskState.VALIDATION, approach = "самостоятельно",
+            plan = listOf("Шаг"), step = 1, caseFile = FULL_CASE, done = listOf("Шаг 1: собрал"),
+        )
+        val s = step(script("Мне непонятно, чёткого вывода нет."), ctx, "проверь")
+        check(s.context.state != TaskState.VALIDATION, "не зависли в VALIDATION при мусорном вердикте")
+    }
+
     println(if (failed == 0) "\nВСЕ ХАРАКТЕРИЗУЮЩИЕ ПРОВЕРКИ ПРОЙДЕНЫ." else "\nПРОВАЛОВ: $failed")
     if (failed > 0) exitProcess(1)
 }
