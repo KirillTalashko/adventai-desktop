@@ -169,6 +169,31 @@ fun main() {
         check(gw.lastToolCount == 0, "шлюз без поддержки инструментов НЕ получил их (${gw.lastToolCount})")
     }
 
+    // 8) Bug-fix (kotlin-diagnostics): отказ на EXECUTION ([SIMPLE], без [STEP_RESULT]) — шаг НЕ продвигается,
+    //    отказ НЕ маскируется под «шаг выполнен». Раньше дефолтился в пустышку и молча уходил в VALIDATION.
+    println("\n[8] EXECUTION · отказ [SIMPLE] → шаг НЕ продвинут, остаёмся в EXECUTION")
+    run {
+        val ctx = TaskContext(
+            task = "виза", state = TaskState.EXECUTION, approach = "самостоятельно",
+            plan = listOf("Шаг один", "Шаг два"), step = 0, caseFile = FULL_CASE,
+        )
+        val s = step(script("[SIMPLE] не могу выполнить этот шаг"), ctx, "дальше")
+        check(s.context.step == 0, "шаг НЕ продвинулся при отказе (было: продвигался с пустышкой)")
+        check(s.context.state == TaskState.EXECUTION, "остаёмся в EXECUTION — отказ не штампуется как DONE")
+    }
+
+    // 9) EXECUTION без тега, но с реальным ответом → шаг продвигается СОДЕРЖАНИЕМ, а не пустышкой «шаг N выполнен».
+    println("\n[9] EXECUTION · текст без [STEP_RESULT] → в [Сделано] реальный текст, не пустышка")
+    run {
+        val ctx = TaskContext(
+            task = "виза", state = TaskState.EXECUTION, approach = "самостоятельно",
+            plan = listOf("Собрать пакет документов"), step = 0, caseFile = FULL_CASE,
+        )
+        val s = step(script("Нужны: загранпаспорт, фото 3.5×4.5, справка с работы."), ctx, "дальше")
+        check(s.context.step == 1, "шаг продвинулся")
+        check(s.context.done.any { it.contains("загранпаспорт") }, "в [Сделано] реальный текст, не «шаг N выполнен»")
+    }
+
     println(if (failed == 0) "\nВСЕ ХАРАКТЕРИЗУЮЩИЕ ПРОВЕРКИ ПРОЙДЕНЫ." else "\nПРОВАЛОВ: $failed")
     if (failed > 0) exitProcess(1)
 }

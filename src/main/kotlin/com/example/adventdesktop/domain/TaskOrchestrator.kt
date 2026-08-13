@@ -211,8 +211,19 @@ class TaskOrchestrator(
         // День 25: RAG под ТЕКУЩИЙ шаг (запрос = текст шага + страна/цель) — выдержки базы + источники.
         val (ragBlock, hits) = ragContext(ctx, history, queryOverride = ctx.current)
         val resp = call(EXECUTOR, ctx, history, profile, instruction, historyLimit = 6, guarded = true, useTools = true, roleId = TunableRole.EXECUTOR.id, ragBlock = ragBlock, params = LlmParams(temperature = TEMP_PRECISE))
+        // Отказ стража ([SIMPLE]: guardFix переписал ответ исполнителя на EXECUTION) — шаг НЕ выполнен.
+        // Раньше отсутствие [STEP_RESULT] дефолтилось в пустышку «шаг N выполнен» → шаг молча продвигался, а
+        // отказ маскировался под успех и штамповался VALIDATION (Bug: kotlin-diagnostics). Теперь показываем
+        // отказ и НЕ продвигаем план.
+        if (hasTag(resp.text, "SIMPLE")) {
+            return TaskStep(AgentReply(withTrace(resp, ctx.docs), resp.usage, hits), ctx.copy(awaiting = Awaiting.NONE, prompt = ""))
+        }
         val needDoc = parseTagged(resp.text, "NEED_DOC")
-        val result = parseTagged(resp.text, "STEP_RESULT") ?: "шаг ${ctx.step + 1} выполнен"
+        // Нет тега, но есть реальный ответ → берём его как результат (а не пустышку), чтобы в [Сделано]/
+        // VALIDATION попало СОДЕРЖАНИЕ. Совсем пусто → шаг не завершён, не продвигаем (не штампуем DONE).
+        val result: String = parseTagged(resp.text, "STEP_RESULT")
+            ?: clean(resp.text).ifBlank { null }
+            ?: return TaskStep(AgentReply(withTrace(resp, ctx.docs), resp.usage, hits), ctx.copy(note = "шаг не завершён результатом — повторите", awaiting = Awaiting.NONE))
         // Документы НЕ блокируют: нужный файл уходит в «понадобится позже», шаг всегда продвигается (#3, #4).
         val advanced = ctx.copy(
             done = ctx.done + "Шаг ${ctx.step + 1}: $result",
