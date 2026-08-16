@@ -1,6 +1,7 @@
 package com.example.adventdesktop.cli
 
 import com.example.adventdesktop.domain.Awaiting
+import com.example.adventdesktop.domain.capText
 import com.example.adventdesktop.domain.CaseFile
 import com.example.adventdesktop.domain.GatewayResponse
 import com.example.adventdesktop.domain.LlmGateway
@@ -214,6 +215,19 @@ fun main() {
         )
         val s = step(script("Мне непонятно, чёткого вывода нет."), ctx, "проверь")
         check(s.context.state != TaskState.VALIDATION, "не зависли в VALIDATION при мусорном вердикте")
+    }
+
+    // 12) Bug-fix (kotlin-diagnostics): усечение [СПРАВКА]/RAG не РАЗРЫВАЕТ URL (иначе агент цитирует битую ссылку).
+    println("\n[12] capText · URL на границе усечения не разрезается")
+    run {
+        val url = "https://consulate.example/visa/requirements/spain-2026"
+        val a = "Требования: паспорт, фото, страховка. Официальный источник: $url — там актуальные сборы."
+        val cutInsideUrl = a.indexOf(url) + 20   // граница cap ВНУТРИ url
+        check(!capText(a, cutInsideUrl, " …").contains("https://consulate"), "разрезанный URL отброшен целиком, не оставлен обрезком")
+
+        val b = "$url — официальный источник визовых требований, актуальные данные и сборы находятся именно там."
+        val cutAfterUrl = b.length - 15          // граница cap ПОСЛЕ завершённого url
+        check(capText(b, cutAfterUrl, " …").contains(url), "завершённый URL сохранён (обрезка была в тексте после него)")
     }
 
     println(if (failed == 0) "\nВСЕ ХАРАКТЕРИЗУЮЩИЕ ПРОВЕРКИ ПРОЙДЕНЫ." else "\nПРОВАЛОВ: $failed")
