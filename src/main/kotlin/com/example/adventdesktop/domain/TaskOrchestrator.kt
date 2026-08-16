@@ -14,6 +14,24 @@ import kotlinx.coroutines.coroutineScope
 data class TaskStep(val reply: AgentReply, val context: TaskContext, val cancel: Boolean = false)
 
 /**
+ * Усечь [s] до [cap] символов, НЕ разрывая URL и по возможности слово: иначе слепой `take()` рвёт официальную
+ * ссылку посреди `http(s)://…`, и агент цитирует битый URL (прямо против приоритета «гигиена источников»,
+ * Bug: kotlin-diagnostics). Если на границе висит начатый, но не завершённый пробелом URL — откатываемся до его
+ * начала (лучше опустить ссылку, чем дать обрезок). `internal` — чтобы покрыть характеризующим харнессом.
+ */
+internal fun capText(s: String, cap: Int, tail: String): String {
+    val t = s.trim()
+    if (t.length <= cap) return t
+    val head = t.substring(0, cap)
+    val lastHttp = head.lastIndexOf("http")
+    val end = when {
+        lastHttp >= 0 && head.substring(lastHttp).none { it == ' ' || it == '\n' } -> lastHttp   // URL разрезан → до его начала
+        else -> head.lastIndexOfAny(charArrayOf(' ', '\n')).takeIf { it > cap / 2 } ?: cap        // граница слова
+    }
+    return t.substring(0, end).trimEnd() + tail
+}
+
+/**
  * Оркестратор конечного автомата задачи (День 13). У каждой стадии свой агент — свой system prompt и
  * отдельный вызов API: интервьюер (INTAKE), планировщик (варианты + план), исполнитель (с гейтом
  * документов), валидатор. Оркестратор парсит управляющие сигналы из ответа и применяет РАЗРЕШЁННЫЙ
@@ -132,10 +150,8 @@ class TaskOrchestrator(
     private fun isUsableResearch(name: String, result: String): Boolean =
         name == "get_visa_requirements" && result.isNotBlank() && !result.startsWith("Ошибка инструмента")
 
-    private fun capResearch(s: String): String {
-        val t = s.trim()
-        return if (t.length <= RESEARCH_CAP) t else t.take(RESEARCH_CAP) + "\n… (сводка усечена; полные данные — по ссылкам выше)"
-    }
+    private fun capResearch(s: String): String =
+        capText(s, RESEARCH_CAP, "\n… (сводка усечена; полные данные — по ссылкам выше)")
 
     private fun jsonStr(s: String): String = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ") + "\""
 
@@ -429,7 +445,7 @@ class TaskOrchestrator(
                 append("[S").append(i + 1).append("] (").append(h.source)
                 if (h.section.isNotBlank()) append(" › ").append(h.section)
                 append(" · ").append(h.chunkId).append(")\n")
-                append(h.text.take(RAG_CHUNK_CAP).trim()).append('\n')
+                append(capText(h.text, RAG_CHUNK_CAP, "…")).append('\n')
             }
             append("[/БАЗА ЗНАНИЙ]")
         }
