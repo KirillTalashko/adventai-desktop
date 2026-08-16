@@ -145,7 +145,7 @@ fun App(state: ChatState) {
         if (state.interviewOpen) InterviewDialog(state)
         if (state.mcpDialogOpen) McpToolsDialog(state)
         if (state.connectorsOpen) ConnectorsDialog(state)
-        if (state.ragOpen) RagDialog(state)
+        if (state.rag.ragOpen) RagDialog(state)
         if (state.localLlm.localLlmOpen) LocalLlmDialog(state)
     }
 }
@@ -425,7 +425,7 @@ private fun Composer(state: ChatState) {
                     if (state.config.developerMode) {
                         IconActionButton(Icons.Filled.Extension, "Инструменты MCP", { state.connectMcp() }, enabled = !state.mcpConnecting, busy = state.mcpConnecting)
                         IconActionButton(Icons.Filled.Tune, "Коннекторы агента", { state.openConnectors() })
-                        IconActionButton(Icons.Filled.Storage, "Индексация знаний (RAG)", { state.openRag() })
+                        IconActionButton(Icons.Filled.Storage, "Индексация знаний (RAG)", { state.rag.openRag() })
                         IconActionButton(Icons.Filled.Memory, "Локальная LLM", { state.localLlm.openLocalLlm() })
                     }
                     DropdownChip(state.model.title, Models.all, { it.title }) { state.chooseModel(it) }
@@ -669,8 +669,8 @@ private fun OptRunCard(label: String, r: LocalRun, tuned: Boolean) {
 @Composable
 private fun RagDialog(state: ChatState) {
     AlertDialog(
-        onDismissRequest = { state.closeRag() },
-        confirmButton = { TextButton(onClick = { state.closeRag() }) { Text("Закрыть") } },
+        onDismissRequest = { state.rag.closeRag() },
+        confirmButton = { TextButton(onClick = { state.rag.closeRag() }) { Text("Закрыть") } },
         title = { Text("Индексация знаний (RAG)") },
         text = {
             Column(
@@ -682,14 +682,14 @@ private fun RagDialog(state: ChatState) {
                     "RAG = агент отвечает по ВАШИМ документам со ссылками, а не из общей памяти модели. Ниже 3 шага.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface
                 )
-                state.ragNote?.let {
+                state.rag.ragNote?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = AppColors.accent)
                 }
 
                 // === Шаг 1 — индекс ===
                 Text("Шаг 1 · Построить индекс базы", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = AppColors.accent)
                 Text(
-                    "База знаний → чанки → эмбеддинги → SQLite-индекс с метаданными. Документов в корпусе: ${state.ragDocCount}.",
+                    "База знаний → чанки → эмбеддинги → SQLite-индекс с метаданными. Документов в корпусе: ${state.rag.ragDocCount}.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 ConnectorToggleRow(
@@ -699,16 +699,16 @@ private fun RagDialog(state: ChatState) {
                 ) { state.chooseRagEmbedder(it) }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
-                        onClick = { state.buildIndex() },
-                        enabled = !state.ragBuilding,
+                        onClick = { state.rag.buildIndex() },
+                        enabled = !state.rag.ragBuilding,
                         colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)
                     ) { Text("Построить индекс") }
-                    if (state.ragBuilding) {
+                    if (state.rag.ragBuilding) {
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
-                        Text(state.ragProgress, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(state.rag.ragProgress, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                state.ragComparison?.let { RagComparisonTable(it) }
+                state.rag.ragComparison?.let { RagComparisonTable(it) }
 
                 // === Шаг 2 — спросить, сравнить два режима ===
                 HorizontalDivider()
@@ -720,24 +720,24 @@ private fun RagDialog(state: ChatState) {
                 )
                 RagPipelineControls(state)
                 OutlinedTextField(
-                    value = state.ragQuery, onValueChange = { state.ragQuery = it },
+                    value = state.rag.ragQuery, onValueChange = { state.rag.ragQuery = it },
                     label = { Text("Вопрос") }, singleLine = true, modifier = Modifier.fillMaxWidth()
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
-                        onClick = { state.ragCompare() },
-                        enabled = state.ragComparison != null && !state.ragAnswering,
+                        onClick = { state.rag.ragCompare() },
+                        enabled = state.rag.ragComparison != null && !state.rag.ragAnswering,
                         colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)
                     ) { Text("Спросить в обоих режимах") }
-                    if (state.ragAnswering) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                    if (state.rag.ragAnswering) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(onClick = { state.askNegativeExample() }, enabled = state.ragComparison != null && !state.ragAnswering) {
+                    TextButton(onClick = { state.rag.askNegativeExample() }, enabled = state.rag.ragComparison != null && !state.rag.ragAnswering) {
                         Text("Пример: вопрос не из базы", style = MaterialTheme.typography.labelSmall)
                     }
                 }
-                val rag = state.ragAnswerRag
-                val plain = state.ragAnswerPlain
+                val rag = state.rag.ragAnswerRag
+                val plain = state.rag.ragAnswerPlain
                 // Ловушка: С RAG отказался, а Без RAG всё равно ответил → плашка «это выдумка» прямо на карточке.
                 val plainInvented = rag != null && plain != null &&
                     ragLooksLikeRefusal(rag.text) && !ragLooksLikeRefusal(plain.text)
@@ -749,7 +749,7 @@ private fun RagDialog(state: ChatState) {
                 }
                 rag?.let { RagAnswerCard(it, warn = false, whatIs = "по вашей базе — со ссылками на источники") }
                 if (rag != null && rag.sources.isNotEmpty()) RagEvidence(rag.sources, ragLooksLikeRefusal(rag.text))
-                state.ragTrace?.let { RagTraceView(it) }
+                state.rag.ragTrace?.let { RagTraceView(it) }
                 if (rag != null && plain != null) {
                     Surface(color = AppColors.accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -777,16 +777,16 @@ private fun RagDialog(state: ChatState) {
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
-                        onClick = { state.runGoldRetrieval() },
-                        enabled = state.ragComparison != null && !state.goldRetrievalRunning,
+                        onClick = { state.rag.runGoldRetrieval() },
+                        enabled = state.rag.ragComparison != null && !state.rag.goldRetrievalRunning,
                         colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)
                     ) { Text("Сравнить поиск (без/с фильтром)") }
-                    if (state.goldRetrievalRunning) {
+                    if (state.rag.goldRetrievalRunning) {
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
-                        Text(state.goldRetrievalProgress, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(state.rag.goldRetrievalProgress, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                if (state.goldRetrieval.isNotEmpty()) GoldRetrievalView(state.goldRetrieval)
+                if (state.rag.goldRetrieval.isNotEmpty()) GoldRetrievalView(state.rag.goldRetrieval)
 
                 Text(
                     "Б. Качество ОТВЕТОВ в обоих режимах (нужен LLM): с RAG — ответ со ссылкой + отказ на ловушке; без RAG — без ссылок, на ловушке выдумка.",
@@ -794,16 +794,16 @@ private fun RagDialog(state: ChatState) {
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
-                        onClick = { state.runGoldAnswers() },
-                        enabled = state.ragComparison != null && !state.goldRunning,
+                        onClick = { state.rag.runGoldAnswers() },
+                        enabled = state.rag.ragComparison != null && !state.rag.goldRunning,
                         colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)
                     ) { Text("Прогнать ответы (10 вопросов)") }
-                    if (state.goldRunning) {
+                    if (state.rag.goldRunning) {
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
-                        Text(state.goldProgress, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(state.rag.goldProgress, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                if (state.goldAnswers.isNotEmpty()) GoldAnswersView(state.goldAnswers)
+                if (state.rag.goldAnswers.isNotEmpty()) GoldAnswersView(state.rag.goldAnswers)
 
                 // === День 24 — обязательные цитаты/источники + режим «не знаю» ===
                 HorizontalDivider()
@@ -817,16 +817,16 @@ private fun RagDialog(state: ChatState) {
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
-                        onClick = { state.runCitationEval() },
-                        enabled = state.ragComparison != null && !state.citationEvalRunning,
+                        onClick = { state.rag.runCitationEval() },
+                        enabled = state.rag.ragComparison != null && !state.rag.citationEvalRunning,
                         colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)
                     ) { Text("Проверить цитаты и источники (10 вопросов)") }
-                    if (state.citationEvalRunning) {
+                    if (state.rag.citationEvalRunning) {
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
-                        Text(state.citationEvalProgress, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(state.rag.citationEvalProgress, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                if (state.citationChecks.isNotEmpty()) CitationEvalView(state.citationChecks)
+                if (state.rag.citationChecks.isNotEmpty()) CitationEvalView(state.rag.citationChecks)
 
                 // === День 28 — RAG локально vs облако ===
                 HorizontalDivider()
@@ -839,16 +839,16 @@ private fun RagDialog(state: ChatState) {
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Локальная модель:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    val localModels = state.localLlm.localLlmModels.ifEmpty { listOf(state.ragLocalModel) }
-                    DropdownChip(state.ragLocalModel, localModels, { it }) { state.ragLocalModel = it }
+                    val localModels = state.localLlm.localLlmModels.ifEmpty { listOf(state.rag.ragLocalModel) }
+                    DropdownChip(state.rag.ragLocalModel, localModels, { it }) { state.rag.ragLocalModel = it }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
-                        onClick = { state.ragCompareLocalVsCloud() },
-                        enabled = state.ragComparison != null && !state.ragVsRunning,
+                        onClick = { state.rag.ragCompareLocalVsCloud() },
+                        enabled = state.rag.ragComparison != null && !state.rag.ragVsRunning,
                         colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)
                     ) { Text("Ответить: локаль vs облако") }
-                    if (state.ragVsRunning) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
+                    if (state.rag.ragVsRunning) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
                 }
                 RagVsView(state)
             }
@@ -859,8 +859,8 @@ private fun RagDialog(state: ChatState) {
 /** День 28 — сравнение RAG-ответа локальной и облачной модели поверх ОДНОГО локального retrieval. */
 @Composable
 private fun RagVsView(state: ChatState) {
-    val local = state.ragVsLocal
-    val cloud = state.ragVsCloud
+    val local = state.rag.ragVsLocal
+    val cloud = state.rag.ragVsCloud
     if (local == null && cloud == null) return
     Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
         if (local?.answer != null && cloud?.answer != null) {
@@ -883,7 +883,7 @@ private fun RagVsView(state: ChatState) {
 
 /** Одна колонка сравнения (локальная/облачная): модель · задержка · токены + текст ответа. */
 @Composable
-private fun RagVsCard(r: ChatState.RagVsResult, localCol: Boolean) {
+private fun RagVsCard(r: RagPanelState.RagVsResult, localCol: Boolean) {
     val accent = if (localCol) AppColors.accent else MaterialTheme.colorScheme.onSurfaceVariant
     ResultCard(color = accent) {
         val head = (if (localCol) "⚡ " else "☁ ") + r.label +
@@ -914,15 +914,15 @@ private fun RagPipelineControls(state: ChatState) {
             Text("Улучшенный поиск (День 23)", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Стратегия:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                DropdownChip(state.ragStrategy, listOf("contextual", "structural", "fixed"), { it }) { state.ragStrategy = it }
+                DropdownChip(state.rag.ragStrategy, listOf("contextual", "structural", "fixed"), { it }) { state.rag.ragStrategy = it }
                 Text("Реранк:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                DropdownChip(rerankLabel(state.ragRerank), RerankMode.entries.toList(), { rerankLabel(it) }) { state.ragRerank = it }
+                DropdownChip(rerankLabel(state.rag.ragRerank), RerankMode.entries.toList(), { rerankLabel(it) }) { state.rag.ragRerank = it }
             }
-            ConnectorToggleRow("Query rewrite (LLM)", "переписать вопрос в поисковый запрос перед эмбеддингом", state.ragRewrite) { state.ragRewrite = it }
-            if (state.ragRewrite) RewriteStatusLine(state.ragTrace)
+            ConnectorToggleRow("Query rewrite (LLM)", "переписать вопрос в поисковый запрос перед эмбеддингом", state.rag.ragRewrite) { state.rag.ragRewrite = it }
+            if (state.rag.ragRewrite) RewriteStatusLine(state.rag.ragTrace)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Порог: %.2f".format(state.ragFloor), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Slider(value = state.ragFloor, onValueChange = { state.ragFloor = it }, valueRange = 0f..1f, modifier = Modifier.weight(1f))
+                Text("Порог: %.2f".format(state.rag.ragFloor), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Slider(value = state.rag.ragFloor, onValueChange = { state.rag.ragFloor = it }, valueRange = 0f..1f, modifier = Modifier.weight(1f))
             }
         }
     }
