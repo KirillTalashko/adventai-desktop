@@ -2,7 +2,6 @@ package com.example.adventdesktop.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -65,6 +64,10 @@ fun SettingsDialog(state: ChatState, onClose: () -> Unit) {
     var proxy by remember { mutableStateOf(state.config.httpProxy) }
 
     AlertDialog(
+        // Единый шаблон окна (§5): бумага, xl-скругление, плоскость (tonalElevation = 0).
+        shape = RoundedCornerShape(Radii.xl),
+        containerColor = MaterialTheme.colorScheme.surface,
+        tonalElevation = 0.dp,
         onDismissRequest = onClose,
         title = { Text("Настройки") },
         text = {
@@ -133,11 +136,13 @@ private fun SettingToggle(title: String, subtitle: String, checked: Boolean, onC
 private fun ModelSelector(selected: ModelOption, onSelect: (ModelOption) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
+        // Кликабельность — через Surface(onClick), а не Modifier.clickable: ripple обрезается по скруглению.
         Surface(
+            onClick = { open = true },
             color = MaterialTheme.colorScheme.surface,
             shape = RoundedCornerShape(Radii.sm),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            modifier = Modifier.fillMaxWidth().clickable { open = true }
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            modifier = Modifier.fillMaxWidth()
         ) {
             Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(selected.title + if (selected.free) "  · free" else "", Modifier.weight(1f))
@@ -170,7 +175,7 @@ fun ProfileDialog(state: ChatState, onClose: () -> Unit) {
                     Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    Text("Профиль предпочтений", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text("Профиль предпочтений", style = MaterialTheme.typography.headlineSmall)
                     Text(
                         "Как ассистент должен с вами общаться — подмешивается в каждый запрос.",
                         style = MaterialTheme.typography.bodyMedium,
@@ -216,7 +221,7 @@ fun MemoryDialog(state: ChatState, onClose: () -> Unit) {
                     // Заголовок
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text("Память", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                            Text("Память", style = MaterialTheme.typography.headlineSmall)
                             Text(
                                 "Что агент помнит о вас и текущей задаче",
                                 style = MaterialTheme.typography.bodyMedium,
@@ -259,7 +264,7 @@ fun MemoryDialog(state: ChatState, onClose: () -> Unit) {
                         TextButton(onClick = { state.clearWorking(); refresh++ }) { Text("Очистить рабочую") }
                         TextButton(onClick = { state.clearLongTerm(); refresh++ }) { Text("Очистить долговременную") }
                         Spacer(Modifier.weight(1f))
-                        Button(onClick = onClose, shape = RoundedCornerShape(Radii.sm)) { Text("Готово") }
+                        Button(onClick = onClose, shape = CircleShape) { Text("Готово") }
                     }
                     Text(
                         "Память пополняется автоматически по ходу диалога; здесь можно дополнить вручную.",
@@ -291,7 +296,7 @@ fun InvariantsDialog(state: ChatState, onClose: () -> Unit) {
                     Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Text("Правила", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text("Правила", style = MaterialTheme.typography.headlineSmall)
                     Text(
                         "Правила, которые ассистент не имеет права нарушать. Хранятся отдельно от диалога, учитываются в каждом ответе; при конфликте ассистент отказывается и объясняет причину.",
                         style = MaterialTheme.typography.bodyMedium,
@@ -311,7 +316,7 @@ fun InvariantsDialog(state: ChatState, onClose: () -> Unit) {
 
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Spacer(Modifier.weight(1f))
-                        Button(onClick = onClose, shape = RoundedCornerShape(Radii.sm)) { Text("Готово") }
+                        Button(onClick = onClose, shape = CircleShape) { Text("Готово") }
                     }
                 }
             }
@@ -349,7 +354,7 @@ fun InterviewDialog(state: ChatState) {
                     if (state.config.reducedMotion) scroll.scrollTo(scroll.maxValue) else scroll.animateScrollTo(scroll.maxValue)
                 }
                 Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Пробное собеседование", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text("Пробное собеседование", style = MaterialTheme.typography.headlineSmall)
                     Text(
                         "Тренировка с «визовым офицером». Основная задача не двигается — после окончания вернётесь на свой шаг.",
                         style = MaterialTheme.typography.bodySmall,
@@ -383,7 +388,7 @@ fun InterviewDialog(state: ChatState) {
                             FilledTonalButton(
                                 onClick = { state.interviewSubmit() },
                                 enabled = !state.interviewLoading && state.interviewInput.isNotBlank(),
-                                shape = RoundedCornerShape(Radii.sm)
+                                shape = CircleShape
                             ) { Text("Ответить") }
                         }
                     }
@@ -395,7 +400,7 @@ fun InterviewDialog(state: ChatState) {
                             ) { Text("Завершить и оценить") }
                         }
                         Spacer(Modifier.weight(1f))
-                        Button(onClick = { state.closeInterview() }, shape = RoundedCornerShape(Radii.sm)) { Text("Вернуться к задаче") }
+                        Button(onClick = { state.closeInterview() }, shape = CircleShape) { Text("Вернуться к задаче") }
                     }
                 }
             }
@@ -452,7 +457,7 @@ private fun AddRow(placeholder: String, action: String, onAdd: (String) -> Unit)
         )
         FilledTonalButton(
             onClick = { if (text.isNotBlank()) { onAdd(text.trim()); text = "" } },
-            shape = RoundedCornerShape(Radii.sm)
+            shape = CircleShape
         ) { Text(action) }
     }
 }

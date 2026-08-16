@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
@@ -91,7 +92,7 @@ fun ProfileForm(
             if (onCancel != null) {
                 TextButton(onClick = onCancel) { Text("Отмена") }
             }
-            Button(onClick = {
+            Button(shape = CircleShape, onClick = {
                 onSubmit(
                     UserProfile(
                         name = name.trim(), about = about.trim(), length = length, tone = tone,

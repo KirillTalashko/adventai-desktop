@@ -8,6 +8,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,7 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -100,11 +101,11 @@ fun TaskInlineActions(state: ChatState) {
 private fun DoneInline(state: ChatState, ctx: TaskContext) {
     Column(Modifier.padding(start = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (ctx.pending.isEmpty()) {
-            Surface(color = AppColors.accent.copy(alpha = 0.14f), shape = RoundedCornerShape(Radii.sm)) {
+            Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = CircleShape) {
                 Text(
                     "✓ Задача завершена",
-                    Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-                    color = AppColors.accent,
+                    Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold
                 )
@@ -153,7 +154,7 @@ private fun ContinueInline(state: ChatState, ctx: TaskContext) {
             Text(
                 "📎 Позже приложите (кнопкой «+»): ${ctx.pending.joinToString(", ")}",
                 style = MaterialTheme.typography.labelSmall,
-                color = AppColors.accent
+                color = AppColors.accentText
             )
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -165,13 +166,14 @@ private fun ContinueInline(state: ChatState, ctx: TaskContext) {
 
 @Composable
 private fun OfferCard(text: String, onAccept: () -> Unit, onDecline: () -> Unit) {
+    // Предложение агента: бумажная карточка с акцентной волосяной границей — заметно, но без «плашки».
     Surface(
-        color = AppColors.accent.copy(alpha = 0.10f),
-        shape = RoundedCornerShape(Radii.sm),
-        border = BorderStroke(1.dp, AppColors.accent.copy(alpha = 0.4f)),
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(Radii.md),
+        border = BorderStroke(1.dp, AppColors.accent),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("💬 $text", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SmallPrimary("Пройти") { onAccept() }
@@ -209,19 +211,21 @@ private fun DocInline(state: ChatState, ctx: TaskContext) {
 @Composable
 fun AttachButton(state: ChatState) {
     val enabled = state.task != null && !state.loading
+    val interaction = remember { MutableInteractionSource() }
     Surface(
         onClick = { pickDocFile()?.let { state.provideDocument(it) } },
         enabled = enabled,
+        interactionSource = interaction,
         shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceVariant,
+        color = hoverColor(interaction, Color.Transparent, MaterialTheme.colorScheme.surfaceVariant),
         modifier = Modifier.size(34.dp)
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(
-                Icons.Filled.Add,
+                Icons.Outlined.Add,
                 contentDescription = "Приложить документ",
-                modifier = Modifier.size(20.dp),
-                tint = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+                modifier = Modifier.size(19.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
@@ -250,22 +254,21 @@ private fun SmallPrimary(label: String, enabled: Boolean = true, onClick: () -> 
     Surface(
         onClick = onClick,
         enabled = enabled,
-        shape = RoundedCornerShape(Radii.sm),
-        color = if (enabled) AppColors.accent else MaterialTheme.colorScheme.outlineVariant
+        shape = CircleShape,
+        color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
     ) {
         Text(
             label,
-            Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-            color = Color.White,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.SemiBold
+            Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            color = if (enabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.labelLarge
         )
     }
 }
 
 @Composable
 private fun SmallGhost(label: String, onClick: () -> Unit) {
-    Surface(onClick = onClick, shape = RoundedCornerShape(Radii.sm), color = Color.Transparent) {
+    Surface(onClick = onClick, shape = CircleShape, color = Color.Transparent) {
         Text(
             label,
             Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
@@ -279,7 +282,7 @@ private fun SmallGhost(label: String, onClick: () -> Unit) {
 @Composable
 private fun PassportEmblem(loading: Boolean, modifier: Modifier = Modifier) {
     val cover = AppColors.accent
-    val pageLight = Color(0xFFE8ECF5)
+    val pageLight = MaterialTheme.colorScheme.surfaceVariant   // страницы — бумага темы, не холодный голубой
     val angle by rememberInfiniteTransition(label = "passport").animateFloat(
         initialValue = 0f,
         targetValue = Math.PI.toFloat(),

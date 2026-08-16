@@ -2,9 +2,18 @@
 
 package com.example.adventdesktop.ui
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -30,17 +39,20 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Rule
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Extension
-import androidx.compose.material.icons.filled.Memory
-import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.outlined.Storage
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.RadioButtonUnchecked
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material.icons.outlined.WarningAmber
 import com.example.adventdesktop.domain.TunableRole
 import androidx.compose.material3.AlertDialog
@@ -71,6 +83,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
@@ -110,8 +123,27 @@ import com.example.adventdesktop.domain.rag.RewriteOutcome
 import com.example.adventdesktop.domain.rag.Scored
 import com.example.adventdesktop.domain.rag.ragLooksLikeRefusal
 
-private val LogoBg = Color(0xFFDADAD6)
-private val LogoFg = Color(0xFF8A8A85)
+/**
+ * Ховер поверхности (§4 «движение сдержанное»): плавная смена тона вместо теней и вспышек.
+ * Возвращает цвет для `Surface(color = …)`; источник взаимодействия отдаётся той же `Surface`.
+ */
+@Composable
+internal fun hoverColor(source: MutableInteractionSource, idle: Color, hover: Color): Color {
+    val hovered by source.collectIsHoveredAsState()
+    val color by animateColorAsState(if (hovered) hover else idle, label = "hover")
+    return color
+}
+
+/**
+ * Колонка чтения (§4): лента и композер живут в центрированной колонке ≤ [Layout.readingWidth]
+ * с крупными полями — так длинный ответ агента читается как страница, а не как таблица во всю ширину.
+ */
+@Composable
+private fun ReadingColumn(content: @Composable () -> Unit) {
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+        Box(Modifier.widthIn(max = Layout.readingWidth).fillMaxWidth()) { content() }
+    }
+}
 
 @Composable
 fun App(state: ChatState) {
@@ -127,13 +159,13 @@ fun App(state: ChatState) {
             } else {
                 Row(Modifier.fillMaxSize()) {
                     Sidebar(
-                        state, Modifier.width(272.dp).fillMaxHeight(),
+                        state, Modifier.width(Layout.sidebar).fillMaxHeight(),
                         onSettings = { showSettings = true },
                         onMemory = { showMemory = true },
                         onProfile = { showProfile = true },
                         onInvariants = { showInvariants = true }
                     )
-                    VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    VerticalDivider(color = MaterialTheme.colorScheme.outline)
                     ChatPane(state, Modifier.weight(1f).fillMaxHeight())
                 }
             }
@@ -160,23 +192,35 @@ private fun Sidebar(
     onInvariants: () -> Unit
 ) {
     Column(
-        modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant).padding(Space.md),
+        verticalArrangement = Arrangement.spacedBy(Space.sm)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        // Бренд-марка: единственное место в сайдбаре, где акцент заливкой.
+        Row(
+            Modifier.padding(start = Space.xs, top = Space.xs, bottom = Space.xs),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Space.md)
+        ) {
             Box(
-                Modifier.size(30.dp).background(LogoBg, RoundedCornerShape(Radii.sm)),
+                Modifier.size(30.dp).background(AppColors.accent, RoundedCornerShape(Radii.xs)),
                 contentAlignment = Alignment.Center
-            ) { Text("В", color = LogoFg, fontWeight = FontWeight.Bold) }
-            Text("Визовый специалист", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            ) { Text("В", color = MaterialTheme.colorScheme.onSecondary, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall) }
+            Column {
+                Text("AdventAI", style = MaterialTheme.typography.titleMedium)
+                Text("Визовый специалист", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
 
         AccountSwitcher(state, onProfile)
 
+        // «Новая сессия» — заметная, но не кричащая: пилюля с волосяной границей, чернильный текст.
+        val newInteraction = remember { MutableInteractionSource() }
         Surface(
             onClick = { state.newConversation() },
-            color = AppColors.accent,
-            shape = RoundedCornerShape(Radii.md),
+            interactionSource = newInteraction,
+            color = hoverColor(newInteraction, Color.Transparent, MaterialTheme.colorScheme.surface),
+            shape = CircleShape,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
             modifier = Modifier.fillMaxWidth()
         ) {
             Row(
@@ -184,46 +228,78 @@ private fun Sidebar(
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Filled.Add, null, Modifier.size(18.dp), tint = Color.White)
-                Spacer(Modifier.width(6.dp))
-                Text("Новая сессия", color = Color.White, fontWeight = FontWeight.Medium)
+                Icon(Icons.Outlined.Add, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurface)
+                Spacer(Modifier.width(Space.sm))
+                Text("Новая сессия", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.labelLarge)
             }
         }
 
-        Text("Диалоги", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp, top = 2.dp))
+        Text(
+            "Диалоги",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = Space.sm, top = Space.xs)
+        )
 
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             items(state.conversationList, key = { it.id }) { meta ->
-                val active = meta.id == state.current?.id
-                Surface(
-                    onClick = { state.open(meta.id) },
-                    color = if (active) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
-                    shape = RoundedCornerShape(Radii.sm),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(Modifier.padding(start = 10.dp, end = 4.dp, top = 7.dp, bottom = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            meta.title,
-                            Modifier.weight(1f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (active) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
-                        )
-                        Box(
-                            Modifier.size(22.dp).clip(RoundedCornerShape(Radii.xs)).clickable { state.deleteConversation(meta.id) },
-                            contentAlignment = Alignment.Center
-                        ) { Icon(Icons.Filled.Close, "удалить", Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    }
-                }
+                ConversationRow(
+                    title = meta.title,
+                    active = meta.id == state.current?.id,
+                    onOpen = { state.open(meta.id) },
+                    onDelete = { state.deleteConversation(meta.id) }
+                )
             }
         }
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        SidebarButton("Правила", null, onInvariants, Modifier.fillMaxWidth())
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SidebarButton("Память", null, onMemory, Modifier.weight(1f))
-            SidebarButton("Настройки", Icons.Filled.Settings, onSettings, Modifier.weight(1f))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+        SidebarButton("Правила", Icons.AutoMirrored.Outlined.Rule, onInvariants)
+        SidebarButton("Память", Icons.Outlined.Memory, onMemory)
+        SidebarButton("Настройки", Icons.Outlined.Settings, onSettings)
+    }
+}
+
+/**
+ * Айтем списка диалогов: активный — тёплая заливка `secondaryContainer` с левой акцентной полоской
+ * (не рамкой вокруг), ✕ проявляется только на ховере, чтобы список оставался спокойным.
+ */
+@Composable
+private fun ConversationRow(title: String, active: Boolean, onOpen: () -> Unit, onDelete: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Surface(
+        onClick = onOpen,
+        interactionSource = interaction,
+        color = when {
+            active -> MaterialTheme.colorScheme.secondaryContainer
+            hovered -> MaterialTheme.colorScheme.surface
+            else -> Color.Transparent
+        },
+        shape = RoundedCornerShape(Radii.sm),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.width(3.dp).height(20.dp)
+                    .background(if (active) AppColors.accent else Color.Transparent, RoundedCornerShape(2.dp))
+            )
+            Text(
+                title,
+                Modifier.weight(1f).padding(start = 9.dp, top = 8.dp, bottom = 8.dp),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (active) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
+            )
+            Box(
+                Modifier.size(24.dp).clip(CircleShape).clickable { onDelete() },
+                contentAlignment = Alignment.Center
+            ) {
+                if (hovered) {
+                    Icon(Icons.Outlined.Close, "удалить", Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Spacer(Modifier.width(Space.xs))
         }
     }
 }
@@ -233,21 +309,23 @@ private fun AccountSwitcher(state: ChatState, onProfile: () -> Unit) {
     var open by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxWidth()) {
+        val interaction = remember { MutableInteractionSource() }
         Surface(
             onClick = { open = true },
-            color = MaterialTheme.colorScheme.surface,
-            shape = RoundedCornerShape(Radii.sm),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            interactionSource = interaction,
+            color = hoverColor(interaction, Color.Transparent, MaterialTheme.colorScheme.surface),
+            shape = CircleShape,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
             modifier = Modifier.fillMaxWidth()
         ) {
             Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(24.dp).background(AppColors.accent, CircleShape), contentAlignment = Alignment.Center) {
                     Text(
                         (state.activeAccount?.name?.trim()?.firstOrNull() ?: 'П').uppercaseChar().toString(),
-                        color = Color.White, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold
+                        color = MaterialTheme.colorScheme.onSecondary, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold
                     )
                 }
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(Space.sm))
                 Column(Modifier.weight(1f)) {
                     Text(
                         state.activeAccount?.name ?: "Профиль",
@@ -296,18 +374,24 @@ private fun AccountSwitcher(state: ChatState, onProfile: () -> Unit) {
     }
 }
 
+/** Низ сайдбара: строка с линейной иконкой и приглушённым текстом; на ховере — заливка бумаги. */
 @Composable
-private fun SidebarButton(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector?, onClick: () -> Unit, modifier: Modifier) {
+private fun SidebarButton(label: String, icon: ImageVector, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
     Surface(
         onClick = onClick,
-        color = MaterialTheme.colorScheme.surface,
+        interactionSource = interaction,
+        color = hoverColor(interaction, Color.Transparent, MaterialTheme.colorScheme.surface),
         shape = RoundedCornerShape(Radii.sm),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = modifier
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Row(Modifier.padding(vertical = 9.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-            if (icon != null) { Icon(icon, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.width(5.dp)) }
-            Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+        Row(
+            Modifier.padding(horizontal = Space.md, vertical = 9.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.md),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(icon, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -315,16 +399,15 @@ private fun SidebarButton(label: String, icon: androidx.compose.ui.graphics.vect
 @Composable
 private fun ChatPane(state: ChatState, modifier: Modifier) {
     Column(modifier) {
-        Box(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp)) {
+        Box(Modifier.fillMaxWidth().padding(horizontal = Space.xl, vertical = Space.lg)) {
             Text(
                 state.current?.title ?: "Визовый специалист",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (state.messages.isEmpty() && !state.loading) {
@@ -342,16 +425,16 @@ private fun ChatPane(state: ChatState, modifier: Modifier) {
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 24.dp, vertical = 18.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    contentPadding = PaddingValues(horizontal = Space.xxl, vertical = Space.xl),
+                    verticalArrangement = Arrangement.spacedBy(Space.xl)
                 ) {
-                    items(state.messages) { MessageView(it) }
+                    items(state.messages) { ReadingColumn { MessageView(it) } }
                     when {
                         taskActive -> {
-                            item { TaskStatusLine(state) }
-                            item { TaskInlineActions(state) }
+                            item { ReadingColumn { TaskStatusLine(state) } }
+                            item { ReadingColumn { TaskInlineActions(state) } }
                         }
-                        state.loading -> item { TypingRow() }
+                        state.loading -> item { ReadingColumn { TypingRow(state.config.reducedMotion) } }
                     }
                 }
             }
@@ -359,7 +442,7 @@ private fun ChatPane(state: ChatState, modifier: Modifier) {
 
         state.error?.let { message ->
             Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth()) {
-                Text(message, Modifier.padding(horizontal = 24.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodySmall)
+                Text(message, Modifier.padding(horizontal = Space.xxl, vertical = Space.sm), color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodySmall)
             }
         }
 
@@ -367,41 +450,70 @@ private fun ChatPane(state: ChatState, modifier: Modifier) {
     }
 }
 
+/** Пустое состояние: крупное serif-приветствие и чипы-подсказки — воздух вместо иллюстраций. */
 @Composable
 private fun EmptyState(state: ChatState) {
-    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        Text("Чем помочь с визой?", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.size(6.dp))
-        Text("Опишите ситуацию — разберём документы, сроки и риски.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.size(18.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = Space.xxl),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text("Чем помочь с визой?", style = MaterialTheme.typography.displaySmall)
+        Spacer(Modifier.size(Space.md))
+        Text(
+            "Опишите ситуацию — разберём документы, сроки и риски.",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.size(Space.xxl))
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
             listOf("Какие документы нужны?", "Сроки оформления", "Риски отказа").forEach { hint ->
-                Surface(
-                    onClick = { state.input = hint; state.submitComposer() },
-                    color = MaterialTheme.colorScheme.surface,
-                    shape = RoundedCornerShape(Radii.md),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-                ) {
-                    Text(hint, Modifier.padding(horizontal = 12.dp, vertical = 8.dp), style = MaterialTheme.typography.bodyMedium)
-                }
+                HintChip(hint) { state.input = hint; state.submitComposer() }
             }
         }
     }
 }
 
+/** Чип-подсказка пустого состояния: пилюля с волосяной границей, на ховере — заливка бумаги. */
 @Composable
-private fun Composer(state: ChatState) {
-    Column(Modifier.padding(horizontal = 20.dp).padding(top = 8.dp, bottom = 14.dp)) {
+private fun HintChip(text: String, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    Surface(
+        onClick = onClick,
+        interactionSource = interaction,
+        color = hoverColor(interaction, Color.Transparent, MaterialTheme.colorScheme.surface),
+        shape = CircleShape,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+    ) {
+        Text(
+            text,
+            Modifier.padding(horizontal = Space.lg, vertical = 10.dp),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
+
+@Composable
+private fun Composer(state: ChatState) = ReadingColumn {
+    Column(Modifier.padding(horizontal = Space.sm).padding(top = Space.sm, bottom = Space.lg)) {
+        // Главный элемент экрана: самое щедрое скругление, при фокусе граница загорается терракотой.
+        val interaction = remember { MutableInteractionSource() }
+        val focused by interaction.collectIsFocusedAsState()
         Surface(
-            shape = RoundedCornerShape(Radii.lg),
+            shape = RoundedCornerShape(Radii.xl),
             color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            border = BorderStroke(
+                if (focused) 1.5.dp else 1.dp,
+                if (focused) AppColors.accent else MaterialTheme.colorScheme.outline
+            ),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Column(Modifier.padding(8.dp)) {
+            Column(Modifier.padding(Space.sm)) {
                 TextField(
                     value = state.input,
                     onValueChange = { state.input = it },
+                    interactionSource = interaction,
                     modifier = Modifier.fillMaxWidth().onPreviewKeyEvent { e ->
                         if (e.key == Key.Enter && e.type == KeyEventType.KeyDown && !e.isShiftPressed) { state.submitComposer(); true } else false
                     },
@@ -410,6 +522,7 @@ private fun Composer(state: ChatState) {
                         Text(hint, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     },
                     maxLines = 6,
+                    textStyle = MaterialTheme.typography.bodyLarge,
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = Color.Transparent,
                         unfocusedContainerColor = Color.Transparent,
@@ -419,24 +532,34 @@ private fun Composer(state: ChatState) {
                         disabledIndicatorColor = Color.Transparent
                     )
                 )
-                Row(Modifier.fillMaxWidth().padding(start = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth().padding(start = Space.xs, top = Space.xs), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
                     AttachButton(state)
                     // Инженерные витрины (MCP/коннекторы) — только в режиме разработчика (Настройки).
                     if (state.config.developerMode) {
-                        IconActionButton(Icons.Filled.Extension, "Инструменты MCP", { state.connectMcp() }, enabled = !state.mcpConnecting, busy = state.mcpConnecting)
-                        IconActionButton(Icons.Filled.Tune, "Коннекторы агента", { state.openConnectors() })
-                        IconActionButton(Icons.Filled.Storage, "Индексация знаний (RAG)", { state.rag.openRag() })
-                        IconActionButton(Icons.Filled.Memory, "Локальная LLM", { state.localLlm.openLocalLlm() })
+                        IconActionButton(Icons.Outlined.Extension, "Инструменты MCP", { state.connectMcp() }, enabled = !state.mcpConnecting, busy = state.mcpConnecting)
+                        IconActionButton(Icons.Outlined.Tune, "Коннекторы агента", { state.openConnectors() })
+                        IconActionButton(Icons.Outlined.Storage, "Индексация знаний (RAG)", { state.rag.openRag() })
+                        IconActionButton(Icons.Outlined.Memory, "Локальная LLM", { state.localLlm.openLocalLlm() })
                     }
                     DropdownChip(state.model.title, Models.all, { it.title }) { state.chooseModel(it) }
                     // День 27 — визуальный маркер: выбрана локальная модель → чат работает без облака.
                     if (state.model.local) {
-                        Text("⚡ локально · без облака", style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
+                        Text(
+                            "⚡ локально · без облака",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = AppColors.accent
+                        )
                     }
                     Spacer(Modifier.weight(1f))
                     if (state.sessionTokens > 0) {
                         val cost = if (state.sessionCost > 0) " · $%.4f".format(state.sessionCost) else ""
-                        Text("${state.sessionTokens} ток.$cost", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            "${state.sessionTokens} ток.$cost",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = AppFonts.mono,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                     SendButton(state)
                 }
@@ -444,13 +567,14 @@ private fun Composer(state: ChatState) {
         }
         Text(
             if (state.hasKey) "Enter — отправить · Shift+Enter — перенос" else "Нет ключа — откройте «Настройки» или задайте переменную окружения",
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 6.dp, start = 6.dp)
+            modifier = Modifier.padding(top = Space.sm, start = Space.lg)
         )
     }
 }
 
+/** Первичное действие: круглая кнопка тёмными чернилами (`primary`), иконка — `onPrimary`. */
 @Composable
 private fun SendButton(state: ChatState) {
     val enabled = !state.loading && state.input.isNotBlank()
@@ -458,23 +582,24 @@ private fun SendButton(state: ChatState) {
         onClick = { state.submitComposer() },
         enabled = enabled,
         shape = CircleShape,
-        color = if (enabled) AppColors.accent else MaterialTheme.colorScheme.outlineVariant,
+        color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
         modifier = Modifier.size(38.dp)
     ) {
         Box(contentAlignment = Alignment.Center) {
+            val tint = if (enabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
             if (state.loading) {
-                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 1.5.dp, color = tint)
             } else {
-                Icon(Icons.Filled.ArrowUpward, "отправить", Modifier.size(20.dp), tint = Color.White)
+                Icon(Icons.Filled.ArrowUpward, "отправить", Modifier.size(20.dp), tint = tint)
             }
         }
     }
 }
 
 /**
- * Атом UI-kit: круглая иконка-кнопка вторичного действия (surfaceVariant · 34.dp · акцентная иконка/спиннер).
+ * Атом UI-kit: круглая иконка-кнопка вторичного действия (линейная иконка · круглый ховер · 34.dp).
  * Сжимает 4 почти одинаковых кнопки композера (MCP/коннекторы/RAG/локальная LLM) в один параметризованный вызов.
- * `SendButton` НЕ входит — он первичный (accent-фон, белая иконка, 38.dp): отдельная семантика, а не булев флаг.
+ * `SendButton` НЕ входит — он первичный (тёмная заливка `primary`, 38.dp): отдельная семантика, а не булев флаг.
  */
 @Composable
 private fun IconActionButton(
@@ -484,16 +609,18 @@ private fun IconActionButton(
     enabled: Boolean = true,
     busy: Boolean = false,
 ) {
+    val interaction = remember { MutableInteractionSource() }
     Surface(
         onClick = onClick,
         enabled = enabled,
+        interactionSource = interaction,
         shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceVariant,
+        color = hoverColor(interaction, Color.Transparent, MaterialTheme.colorScheme.surfaceVariant),
         modifier = Modifier.size(34.dp)
     ) {
         Box(contentAlignment = Alignment.Center) {
-            if (busy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = AppColors.accent)
-            else Icon(icon, contentDescription, Modifier.size(20.dp), tint = AppColors.accent)
+            if (busy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 1.5.dp, color = AppColors.accent)
+            else Icon(icon, contentDescription, Modifier.size(19.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -502,7 +629,11 @@ private fun IconActionButton(
 @Composable
 private fun LocalLlmDialog(state: ChatState) {
     AlertDialog(
-        onDismissRequest = { state.localLlm.closeLocalLlm() },
+        // Единый шаблон окна (§5): бумага, xl-скругление, плоскость (tonalElevation = 0).
+        shape = RoundedCornerShape(Radii.xl),
+        containerColor = MaterialTheme.colorScheme.surface,
+        tonalElevation = 0.dp,
+        onDismissRequest ={ state.localLlm.closeLocalLlm() },
         confirmButton = { TextButton(onClick = { state.localLlm.closeLocalLlm() }) { Text("Закрыть") } },
         title = { Text("Локальная LLM (Ollama)") },
         text = {
@@ -516,7 +647,7 @@ private fun LocalLlmDialog(state: ChatState) {
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface
                 )
                 state.localLlm.localLlmNote?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = AppColors.accent)
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = AppColors.accentText)
                 }
                 if (state.localLlm.localLlmModels.isNotEmpty()) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -576,7 +707,7 @@ private fun LocalLlmDialog(state: ChatState) {
                 val optB = state.localLlm.optBefore
                 val optA = state.localLlm.optAfter
                 if (optB != null && optA != null) {
-                    Surface(color = AppColors.accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+                    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(Radii.md), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text("Разница (до → после)", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
                             Text("• Скорость: ${optB.ms} → ${optA.ms} мс · throughput ${"%.0f".format(optB.tokPerSec)} → ${"%.0f".format(optA.tokPerSec)} ток/с.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
@@ -607,7 +738,7 @@ private fun LocalLlmDialog(state: ChatState) {
                     TextButton(onClick = { state.service.serviceBurst() }, enabled = !state.service.serviceRunning) { Text("Нагрузка ×6") }
                 }
                 if (state.service.serviceLog.isNotEmpty()) {
-                    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+                    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(Radii.md), modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                 Text("Ответы сервиса (свежие сверху):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -626,8 +757,9 @@ private fun LocalLlmDialog(state: ChatState) {
 @Composable
 private fun LocalLlmResultCard(r: LocalLlmPanelState.LocalLlmResult) {
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(Radii.md),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -655,7 +787,7 @@ private fun LocalLlmResultCard(r: LocalLlmPanelState.LocalLlmResult) {
 @Composable
 private fun OptRunCard(label: String, r: LocalRun, tuned: Boolean) {
     val accent = if (tuned) AppColors.accent else MaterialTheme.colorScheme.onSurfaceVariant
-    ResultCard(color = accent) {
+    ResultCard {
         Text(label, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = accent)
         Text(
             "⏱ ${r.ms} мс · ${"%.0f".format(r.tokPerSec)} ток/с · вход ${r.promptTokens} / выход ${r.evalTokens} ток.",
@@ -669,7 +801,11 @@ private fun OptRunCard(label: String, r: LocalRun, tuned: Boolean) {
 @Composable
 private fun RagDialog(state: ChatState) {
     AlertDialog(
-        onDismissRequest = { state.rag.closeRag() },
+        // Единый шаблон окна (§5): бумага, xl-скругление, плоскость (tonalElevation = 0).
+        shape = RoundedCornerShape(Radii.xl),
+        containerColor = MaterialTheme.colorScheme.surface,
+        tonalElevation = 0.dp,
+        onDismissRequest ={ state.rag.closeRag() },
         confirmButton = { TextButton(onClick = { state.rag.closeRag() }) { Text("Закрыть") } },
         title = { Text("Индексация знаний (RAG)") },
         text = {
@@ -683,7 +819,7 @@ private fun RagDialog(state: ChatState) {
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface
                 )
                 state.rag.ragNote?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = AppColors.accent)
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = AppColors.accentText)
                 }
 
                 // === Шаг 1 — индекс ===
@@ -751,7 +887,7 @@ private fun RagDialog(state: ChatState) {
                 if (rag != null && rag.sources.isNotEmpty()) RagEvidence(rag.sources, ragLooksLikeRefusal(rag.text))
                 state.rag.ragTrace?.let { RagTraceView(it) }
                 if (rag != null && plain != null) {
-                    Surface(color = AppColors.accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+                    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(Radii.md), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                             Text("В чём разница", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
                             if (plainInvented) {
@@ -865,7 +1001,7 @@ private fun RagVsView(state: ChatState) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
         if (local?.answer != null && cloud?.answer != null) {
             val faster = if (local.ms <= cloud.ms) "локальная" else "облачная"
-            Surface(color = AppColors.accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+            Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(Radii.md), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text("Оценка", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
                     Text("• Скорость: локальная ${local.ms} мс · облачная ${cloud.ms} мс → быстрее $faster.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
@@ -885,7 +1021,7 @@ private fun RagVsView(state: ChatState) {
 @Composable
 private fun RagVsCard(r: RagPanelState.RagVsResult, localCol: Boolean) {
     val accent = if (localCol) AppColors.accent else MaterialTheme.colorScheme.onSurfaceVariant
-    ResultCard(color = accent) {
+    ResultCard {
         val head = (if (localCol) "⚡ " else "☁ ") + r.label +
             (r.answer?.let { " · ${r.ms} мс · ${it.usage?.total ?: 0} ток." } ?: "")
         Text(head, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = accent)
@@ -909,7 +1045,7 @@ private fun hitMark(h: Boolean?): String = when (h) { true -> "✓"; false -> "�
 /** Настройки улучшенного поиска (День 23): стратегия, реранк, query rewrite, порог отсечения. */
 @Composable
 private fun RagPipelineControls(state: ChatState) {
-    Surface(color = AppColors.accent.copy(alpha = 0.05f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(Radii.md), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("Улучшенный поиск (День 23)", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -939,7 +1075,7 @@ private fun RewriteStatusLine(t: RetrievalTrace?) {
         null, RewriteOutcome.OFF ->
             "включён — задайте вопрос и запустите поиск, чтобы увидеть результат" to onVar
         RewriteOutcome.REWRITTEN ->
-            "✏ переписал: «${t.originalQuery}» → «${t.usedQuery}»" to AppColors.accent
+            "✏ переписал: «${t.originalQuery}» → «${t.usedQuery}»" to AppColors.accentText
         RewriteOutcome.UNCHANGED ->
             "✔ вернул то же (вопрос уже краткий — переписывать нечего)" to onVar
         RewriteOutcome.FAILED ->
@@ -955,11 +1091,11 @@ private fun RagTraceView(t: RetrievalTrace) {
     fun hits(list: List<Scored>, color: androidx.compose.ui.graphics.Color) = list.forEach { s ->
         Text("  %.3f · %s › %s".format(s.score, s.chunk.meta.source, s.chunk.meta.section.ifBlank { "-" }), style = MaterialTheme.typography.labelSmall, color = color)
     }
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(Radii.md), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text("Второй этап поиска (реранк + фильтр)", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelSmall, color = AppColors.accent)
+            Text("Второй этап поиска (реранк + фильтр)", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelSmall, color = AppColors.accentText)
             when (t.rewrite) {
-                RewriteOutcome.REWRITTEN -> Text("Query rewrite: «${t.originalQuery}» → «${t.usedQuery}»", style = MaterialTheme.typography.labelSmall, color = AppColors.accent)
+                RewriteOutcome.REWRITTEN -> Text("Query rewrite: «${t.originalQuery}» → «${t.usedQuery}»", style = MaterialTheme.typography.labelSmall, color = AppColors.accentText)
                 RewriteOutcome.UNCHANGED -> Text("Query rewrite включён, но запрос не изменился (вопрос уже краткий).", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 RewriteOutcome.FAILED -> Text("Query rewrite не сработал (сеть/лимит) — искали по исходному вопросу.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
                 RewriteOutcome.OFF -> {}
@@ -969,7 +1105,7 @@ private fun RagTraceView(t: RetrievalTrace) {
             hits(t.before, MaterialTheme.colorScheme.onSurface)
             Text("top-K ПОСЛЕ (реранк+фильтр):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (t.after.isEmpty()) Text("  — пусто: нерелевантно → честный отказ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
-            else hits(t.after, AppColors.accent)
+            else hits(t.after, AppColors.accentText)
         }
     }
 }
@@ -982,7 +1118,7 @@ private fun GoldRetrievalView(items: List<GoldRetrieval>) {
     val impHit = pos.count { it.improvedHit == true }
     val fixedCount = pos.count { it.baseHit != true && it.improvedHit == true }
     val neg = items.firstOrNull { it.q.isNegative }
-    Surface(color = AppColors.accent.copy(alpha = 0.06f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(Radii.md), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Text("Итог: старый поиск → новый поиск", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
             Text(
@@ -1024,7 +1160,7 @@ private fun GoldRetrievalRow(r: GoldRetrieval) {
             Text(
                 "Нужен: ${r.q.sources.joinToString(" / ")} · было ${hitMark(r.baseHit)} → стало ${hitMark(r.improvedHit)} — $verdict",
                 style = MaterialTheme.typography.labelSmall,
-                color = if (flipped) AppColors.accent else MaterialTheme.colorScheme.onSurfaceVariant
+                color = if (flipped) AppColors.accentText else MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
@@ -1034,7 +1170,7 @@ private fun GoldRetrievalRow(r: GoldRetrieval) {
 @Composable
 private fun RagAnswerCard(a: RagAnswer, warn: Boolean, whatIs: String, note: String? = null) {
     val accent = if (warn) MaterialTheme.colorScheme.error else AppColors.accent
-    ResultCard(color = accent) {
+    ResultCard {
         Text("${a.mode} — $whatIs", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = accent)
         if (a.abstained) Text("🚫 режим «не знаю» — контекст слабее порога, ответ не выдумывается", fontWeight = FontWeight.Medium, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
         note?.let { Text(it, fontWeight = FontWeight.Medium, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error) }
@@ -1045,7 +1181,7 @@ private fun RagAnswerCard(a: RagAnswer, warn: Boolean, whatIs: String, note: Str
         if (a.sources.isNotEmpty()) {
             Text("Источники (файл › раздел · chunk_id):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             a.sources.forEach { s ->
-                Text("[${s.n}] %.3f · %s › %s · %s".format(s.score, s.source, s.section, s.chunkId), style = MaterialTheme.typography.labelSmall, color = accent)
+                Text("[${s.n}] %.3f · %s › %s · %s".format(s.score, s.source, s.section, s.chunkId), style = MaterialTheme.typography.labelSmall, color = AppColors.accentText)
             }
         }
         if (a.citations.isNotEmpty()) {
@@ -1072,9 +1208,9 @@ private fun RagEvidence(sources: List<RagSource>, refused: Boolean) {
             color = if (refused) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
         )
         sources.forEach { s ->
-            Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+            Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(Radii.md), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("[${s.n}] %s › %s · %s · %.3f".format(s.source, s.section, s.chunkId, s.score), style = MaterialTheme.typography.labelSmall, color = AppColors.accent)
+                    Text("[${s.n}] %s › %s · %s · %.3f".format(s.source, s.section, s.chunkId, s.score), style = MaterialTheme.typography.labelSmall, color = AppColors.accentText)
                     ExpandableText(s.text, collapsedLines = 3)
                 }
             }
@@ -1090,7 +1226,7 @@ private fun CitationEvalView(items: List<CitationCheck>) {
     val withQuotes = pos.count { it.quotesPresent }
     val faithful = pos.count { it.faithful == true }
     val neg = items.firstOrNull { it.q.isNegative }
-    Surface(color = AppColors.accent.copy(alpha = 0.06f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(Radii.md), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Text("Итог (по ${pos.size} содержательным вопросам)", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
             Text("• источники есть: $withSources из ${pos.size}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
@@ -1112,7 +1248,7 @@ private fun CitationEvalView(items: List<CitationCheck>) {
 /** Одна строка проверки Дня 24: вопрос + вердикт + сам ответ, источники (chunk_id) и цитаты (для наглядности). */
 @Composable
 private fun CitationEvalRow(c: CitationCheck) {
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(Radii.md), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text("#${c.q.id}. ${c.q.question}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
             val line = if (c.expectedAbstain) {
@@ -1121,7 +1257,7 @@ private fun CitationEvalRow(c: CitationCheck) {
                 "источники ${hitMark(c.sourcesPresent)} · цитаты ${hitMark(c.quotesPresent)} · смысл ${hitMark(c.faithful)}" +
                     if (c.abstained) " · «не знаю» (контекст слабый)" else ""
             }
-            Text(line, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Medium, color = if (c.pass) AppColors.accent else MaterialTheme.colorScheme.error)
+            Text(line, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Medium, color = if (c.pass) AppColors.accentText else MaterialTheme.colorScheme.error)
 
             Text("Ответ:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             ExpandableText(c.answer.text, collapsedLines = 3)
@@ -1129,7 +1265,7 @@ private fun CitationEvalRow(c: CitationCheck) {
             if (c.answer.sources.isNotEmpty()) {
                 Text("Источники (файл › раздел · chunk_id):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 c.answer.sources.forEach { s ->
-                    Text("[${s.n}] %.3f · %s › %s · %s".format(s.score, s.source, s.section, s.chunkId), style = MaterialTheme.typography.labelSmall, color = AppColors.accent)
+                    Text("[${s.n}] %.3f · %s › %s · %s".format(s.score, s.source, s.section, s.chunkId), style = MaterialTheme.typography.labelSmall, color = AppColors.accentText)
                 }
             }
             if (c.answer.citations.isNotEmpty()) {
@@ -1149,7 +1285,7 @@ private fun GoldAnswersView(items: List<GoldAnswer>) {
     val withSources = positives.count { it.ragHasSources }
     val onTarget = positives.count { it.ragOnTarget == true }
     val neg = items.firstOrNull { it.q.isNegative }
-    Surface(color = AppColors.accent.copy(alpha = 0.06f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(Radii.md), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("Итог сравнения", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
             Text(
@@ -1183,7 +1319,7 @@ private fun GoldAnswerRow(a: GoldAnswer) {
     }
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text("#${a.q.id}. ${a.q.question}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
-        Text("С RAG: $ragMark   ·   Без RAG: $plainMark", style = MaterialTheme.typography.labelSmall, color = AppColors.accent)
+        Text("С RAG: $ragMark   ·   Без RAG: $plainMark", style = MaterialTheme.typography.labelSmall, color = AppColors.accentText)
         ExpandableText("С RAG — ${a.rag.text}", collapsedLines = 2)
         ExpandableText("Без RAG — ${a.plain.text}", collapsedLines = 2)
     }
@@ -1202,7 +1338,7 @@ private fun RagComparisonTable(cmp: RagComparisonView) {
             Text(contextual, Modifier.weight(1.1f), style = MaterialTheme.typography.labelSmall, fontWeight = weight, color = if (header) AppColors.accent else Color.Unspecified)
         }
     }
-    Surface(color = AppColors.accent.copy(alpha = 0.06f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+    Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(Radii.md), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             val f = cmp.fixed
             val s = cmp.structural
@@ -1246,29 +1382,32 @@ private fun InstalledSkillRow(title: String, subtitle: String) {
             Text(title, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Surface(color = AppColors.accent.copy(alpha = 0.12f), shape = RoundedCornerShape(Radii.xs)) {
+        Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = CircleShape) {
             Text(
                 "установлен",
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = AppColors.accent
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSecondaryContainer
             )
         }
     }
 }
 
 /**
- * Атом UI-kit: рамка карточки результата (accent-подложка · Radii.xs · во всю ширину · Column padding 10/spacing 4).
- * Сводит 4 карточки (Opt/Connector/RagVs/RagAnswer); `color`/`alpha` параметризованы (у части — условный accent).
- * `LocalLlmResultCard` НЕ входит — у него другой каркас (surfaceVariant, 10.dp), это не флаг атома.
+ * Атом UI-kit: «бумажная карточка» (§5) — `surface` + волосяная граница + скругление md, во всю ширину.
+ * Единый каркас для всех блоков результатов (Opt/Connector/RagVs/RagAnswer/сводки/цитаты/логи): цветом
+ * теперь отличается только заголовок-метка внутри, а не подложка — плоскость вместо тонированных плашек.
  */
 @Composable
-private fun ResultCard(
-    color: Color = AppColors.accent,
-    alpha: Float = 0.08f,
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    Surface(color = color.copy(alpha = alpha), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp), content = content)
+private fun ResultCard(content: @Composable ColumnScope.() -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(Radii.md),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(Space.md), verticalArrangement = Arrangement.spacedBy(Space.xs), content = content)
     }
 }
 
@@ -1276,7 +1415,7 @@ private fun ResultCard(
 @Composable
 private fun ConnectorResultView(label: String, run: ConnectorRun?) {
     if (run == null) return
-    ResultCard(alpha = 0.06f) {
+    ResultCard {
         val toks = run.usage?.let { "prompt ${it.prompt} · total ${it.total}" } ?: "—"
         Text("$label · токены: $toks", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
         run.steps.forEach { Text(it.title, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -1288,7 +1427,11 @@ private fun ConnectorResultView(label: String, run: ConnectorRun?) {
 @Composable
 private fun ConnectorsDialog(state: ChatState) {
     AlertDialog(
-        onDismissRequest = { state.closeConnectors() },
+        // Единый шаблон окна (§5): бумага, xl-скругление, плоскость (tonalElevation = 0).
+        shape = RoundedCornerShape(Radii.xl),
+        containerColor = MaterialTheme.colorScheme.surface,
+        tonalElevation = 0.dp,
+        onDismissRequest ={ state.closeConnectors() },
         confirmButton = { TextButton(onClick = { state.closeConnectors() }) { Text("Закрыть") } },
         title = { Text("Коннекторы агента") },
         text = {
@@ -1352,7 +1495,7 @@ private fun ConnectorsDialog(state: ChatState) {
                     state.promptTuneNote?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     state.promptProposals.forEach { p ->
                         val roleName = TunableRole.byId(p.role)?.displayName ?: p.role
-                        Surface(color = AppColors.accent.copy(alpha = 0.08f), shape = RoundedCornerShape(Radii.xs), modifier = Modifier.fillMaxWidth()) {
+                        Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(Radii.md), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), modifier = Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text(roleName, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, color = AppColors.accent)
                                 Text("Добавить: ${p.add}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
@@ -1382,7 +1525,11 @@ private fun ConnectorsDialog(state: ChatState) {
 @Composable
 private fun McpToolsDialog(state: ChatState) {
     AlertDialog(
-        onDismissRequest = { state.closeMcpDialog() },
+        // Единый шаблон окна (§5): бумага, xl-скругление, плоскость (tonalElevation = 0).
+        shape = RoundedCornerShape(Radii.xl),
+        containerColor = MaterialTheme.colorScheme.surface,
+        tonalElevation = 0.dp,
+        onDismissRequest ={ state.closeMcpDialog() },
         confirmButton = { TextButton(onClick = { state.closeMcpDialog() }) { Text("Закрыть") } },
         title = { Text("Инструменты MCP") },
         text = {
@@ -1401,8 +1548,9 @@ private fun McpToolsDialog(state: ChatState) {
                     state.mcpError != null -> Text("Ошибка: ${state.mcpError}", color = MaterialTheme.colorScheme.error)
                     else -> {
                         Surface(
-                            color = AppColors.accent.copy(alpha = 0.10f),
-                            shape = RoundedCornerShape(Radii.sm),
+                            color = MaterialTheme.colorScheme.surface,
+                            shape = RoundedCornerShape(Radii.md),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -1569,8 +1717,9 @@ private fun McpToolsDialog(state: ChatState) {
                         state.mcpPipelineSteps.forEach { step ->
                             val tint = if (step.ok) AppColors.accent else MaterialTheme.colorScheme.error
                             Surface(
-                                color = tint.copy(alpha = 0.08f),
-                                shape = RoundedCornerShape(Radii.xs),
+                                color = MaterialTheme.colorScheme.surface,
+                                shape = RoundedCornerShape(Radii.md),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -1614,7 +1763,7 @@ private fun ExpandableText(text: String, collapsedLines: Int = 6) {
             Text(
                 if (expanded) "Свернуть" else "Развернуть весь ответ",
                 style = MaterialTheme.typography.labelSmall,
-                color = AppColors.accent,
+                color = AppColors.accentText,
             )
         }
     }
@@ -1624,12 +1773,15 @@ private fun ExpandableText(text: String, collapsedLines: Int = 6) {
 private fun <T> DropdownChip(label: String, items: List<T>, itemLabel: (T) -> String, onSelect: (T) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
+        val interaction = remember { MutableInteractionSource() }
         Surface(
             onClick = { open = true },
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            shape = RoundedCornerShape(Radii.sm)
+            interactionSource = interaction,
+            color = hoverColor(interaction, Color.Transparent, MaterialTheme.colorScheme.surfaceVariant),
+            shape = CircleShape,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
         ) {
-            Row(Modifier.padding(start = 10.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(Modifier.padding(start = Space.md, end = Space.sm, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
                 Icon(Icons.Filled.KeyboardArrowDown, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -1642,20 +1794,29 @@ private fun <T> DropdownChip(label: String, items: List<T>, itemLabel: (T) -> St
     }
 }
 
+/**
+ * Пользователь — мягкая пилюля справа на бумаге; агент — просто текст в колонке чтения, без пузыря
+ * (так длинный ответ читается как страница, а не как реплика мессенджера).
+ */
 @Composable
 private fun MessageView(message: Message) {
     if (message.role == Role.User) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(Radii.lg), modifier = Modifier.widthIn(max = 560.dp)) {
-                Text(message.text, Modifier.padding(horizontal = 14.dp, vertical = 10.dp), color = MaterialTheme.colorScheme.onSurface)
+                Text(
+                    message.text,
+                    Modifier.padding(horizontal = Space.lg, vertical = Space.md),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
             }
         }
     } else {
-        Column(Modifier.fillMaxWidth().padding(end = 48.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Space.sm)) {
             Text("Визовый специалист", style = MaterialTheme.typography.labelMedium, color = AppColors.accent, fontWeight = FontWeight.SemiBold)
             parseSegments(message.text).forEach { seg ->
                 when (seg) {
-                    is Segment.Plain -> MarkdownText(seg.text, AppColors.accent)
+                    is Segment.Plain -> MarkdownText(seg.text, AppColors.accentText)
                     is Segment.Checklist -> ChecklistView(seg.items)
                 }
             }
@@ -1664,41 +1825,75 @@ private fun MessageView(message: Message) {
     }
 }
 
+/** Строка расхода под ответом: моноширинный чип, приглушённый — цифры не спорят с текстом. */
 @Composable
 private fun TokenLine(usage: TokenUsage) {
-    Text(
-        "промпт ${usage.prompt} · ответ ${usage.completion} · всего ${usage.total}",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
+    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant) {
+        Text(
+            "↑${usage.prompt}  ↓${usage.completion}  ·  Σ${usage.total}",
+            Modifier.padding(horizontal = Space.md, vertical = Space.xs),
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = AppFonts.mono,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
 }
 
+/** Чек-лист документов: бумажная карточка, в строке — линейная иконка статуса, имя и точка-бейдж. */
 @Composable
 private fun ChecklistView(items: List<Pair<String, String>>) {
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(Radii.md)) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(Radii.lg),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(Space.lg), verticalArrangement = Arrangement.spacedBy(Space.md)) {
             items.forEach { (name, status) ->
                 val color = statusColor(status)
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Box(Modifier.size(10.dp).background(color, CircleShape))
-                    Text(name, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurface)
-                    Surface(color = color.copy(alpha = 0.14f), shape = RoundedCornerShape(Radii.xs)) {
-                        Text(status, Modifier.padding(horizontal = 8.dp, vertical = 2.dp), color = color, style = MaterialTheme.typography.labelMedium)
-                    }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.md)) {
+                    Icon(statusIcon(status), null, Modifier.size(17.dp), tint = color)
+                    Text(name, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Box(Modifier.size(7.dp).background(color, CircleShape))
+                    Text(status, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
     }
 }
 
+/**
+ * Индикатор набора: три терракотовые точки «дышат» по очереди (§4 — движение сдержанное).
+ * При «Меньше анимаций» (Настройки) точки статичны — настройка обязана выключать и этот цикл.
+ */
 @Composable
-private fun TypingRow() {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        CircularProgressIndicator(Modifier.size(15.dp), strokeWidth = 2.dp, color = AppColors.accent)
-        Text("печатает…", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+private fun TypingRow(reducedMotion: Boolean) {
+    val transition = rememberInfiniteTransition(label = "typing")
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+        repeat(3) { i ->
+            val breath by transition.animateFloat(
+                initialValue = 0.25f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(tween(620, delayMillis = i * 180), RepeatMode.Reverse),
+                label = "dot$i"
+            )
+            Box(Modifier.size(7.dp).alpha(if (reducedMotion) 0.6f else breath).background(AppColors.accent, CircleShape))
+        }
     }
 }
 
+/** Линейная иконка статуса документа — парная к [statusColor]. */
+private fun statusIcon(status: String): ImageVector {
+    val s = status.trim().lowercase()
+    return when {
+        s.startsWith("провер") -> Icons.Outlined.CheckCircle
+        s.startsWith("загруж") -> Icons.Outlined.UploadFile
+        s.startsWith("не хват") || s.startsWith("нет") -> Icons.Outlined.WarningAmber
+        else -> Icons.Outlined.RadioButtonUnchecked
+    }
+}
+
+@Composable
 private fun statusColor(status: String): Color {
     val s = status.trim().lowercase()
     return when {

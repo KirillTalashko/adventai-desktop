@@ -28,7 +28,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import com.example.adventdesktop.domain.Account
@@ -77,8 +76,7 @@ fun Onboarding(state: ChatState) {
 private fun CreateProfile(state: ChatState, onCancel: (() -> Unit)?) {
     Text(
         if (state.accountList.isEmpty()) "Добро пожаловать" else "Новый аккаунт",
-        style = MaterialTheme.typography.headlineSmall,
-        fontWeight = FontWeight.Bold
+        style = MaterialTheme.typography.headlineSmall
     )
     Text(
         "Создайте профиль — визовый специалист подстроится под ваш стиль, формат ответов и ограничения. Профиль можно изменить в любой момент.",
@@ -95,7 +93,7 @@ private fun CreateProfile(state: ChatState, onCancel: (() -> Unit)?) {
 
 @Composable
 private fun ChooseAccount(state: ChatState, onCreateNew: () -> Unit) {
-    Text("С возвращением", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+    Text("С возвращением", style = MaterialTheme.typography.headlineSmall)
     Text(
         "Выберите аккаунт, чтобы продолжить, или создайте новый.",
         style = MaterialTheme.typography.bodyMedium,
@@ -113,7 +111,7 @@ private fun ChooseAccount(state: ChatState, onCreateNew: () -> Unit) {
             "+ Создать новый профиль",
             Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
             style = MaterialTheme.typography.bodyMedium,
-            color = AppColors.accent,
+            color = MaterialTheme.colorScheme.onSurface,
             fontWeight = FontWeight.Medium
         )
     }
@@ -132,7 +130,7 @@ private fun AccountRow(account: Account, onClick: () -> Unit) {
             Box(Modifier.size(30.dp).background(AppColors.accent, CircleShape), contentAlignment = Alignment.Center) {
                 Text(
                     (account.name.trim().firstOrNull() ?: 'П').uppercaseChar().toString(),
-                    color = Color.White, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold
+                    color = MaterialTheme.colorScheme.onSecondary, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold
                 )
             }
             Spacer(Modifier.width(12.dp))
