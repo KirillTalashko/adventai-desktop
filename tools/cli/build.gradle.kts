@@ -1,7 +1,7 @@
 import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
 
 plugins {
-    kotlin("jvm")
+    id("advent.kotlin-jvm")
     id("com.gradleup.shadow")
 }
 

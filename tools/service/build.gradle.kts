@@ -1,21 +1,16 @@
 import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
 
 plugins {
-    kotlin("jvm")
+    id("advent.kotlin-jvm")
     kotlin("plugin.serialization")
     id("com.gradleup.shadow")
 }
 
 dependencies {
     implementation(project(":core:data"))
-    implementation("io.ktor:ktor-server-core:3.1.3")
-    implementation("io.ktor:ktor-server-cio:3.1.3")
-    implementation("io.ktor:ktor-server-auth:3.1.3")
-    implementation("io.ktor:ktor-client-core:3.1.3")
-    implementation("io.ktor:ktor-client-cio:3.1.3")
-    implementation("io.ktor:ktor-client-content-negotiation:3.1.3")
-    implementation("io.ktor:ktor-serialization-kotlinx-json:3.1.3")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
+    implementation(libs.bundles.ktor.server)
+    implementation(libs.bundles.ktor.client)
+    implementation(libs.serialization.json)
 }
 
 // День 30: fat-jar приватного LLM-сервиса (java -jar visa-llm-service-all.jar; настройки — через env).

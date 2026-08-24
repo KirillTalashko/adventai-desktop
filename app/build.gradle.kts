@@ -1,7 +1,7 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 
 plugins {
-    kotlin("jvm")
+    id("advent.kotlin-jvm")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.compose")
 }
@@ -13,11 +13,11 @@ dependencies {
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
     implementation(compose.materialIconsExtended)
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.10.2")
+    implementation(libs.coroutines.swing)
 
     // DI — см. коммент о версии в :core:data (тот же капкан с метаданными Kotlin).
     // Только koin-core: koin-compose тянет compose-runtime/foundation 1.8.2 против 1.7.3 здесь.
-    implementation("io.insert-koin:koin-core:4.1.1")
+    implementation(libs.koin.core)
 
     // РАНТАЙМ-связь, невидимая компилятору. McpClient поднимает MCP-сервер подпроцессом:
     //   java -cp <System.getProperty("java.class.path")> com.example.adventdesktop.mcp.*ServerKt
@@ -26,9 +26,9 @@ dependencies {
     runtimeOnly(project(":tools:mcp"))
 
     testImplementation(kotlin("test"))
-    testImplementation(platform("org.junit:junit-bom:5.14.4"))
-    testImplementation("io.insert-koin:koin-test:4.1.1")
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    testImplementation(platform(libs.junit.bom))
+    testImplementation(libs.koin.test)
+    testRuntimeOnly(libs.junit.platform.launcher)
 }
 
 // Тесты на JUnit Platform (JUnit 5); kotlin("test") сам подставляет вариант kotlin-test-junit5.

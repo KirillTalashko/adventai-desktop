@@ -1,4 +1,7 @@
 pluginManagement {
+    // Convention-плагины (advent.kotlin-jvm / advent.kotlin-library) — шаг B1 плана.
+    includeBuild("build-logic")
+
     repositories {
         gradlePluginPortal()
         mavenCentral()
