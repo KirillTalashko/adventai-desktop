@@ -29,6 +29,7 @@ data class TaskContext(
     val step: Int = 0,
     val done: List<String> = emptyList(),
     val docs: List<String> = emptyList(),     // приложенные документы: «метка → файл»
+    val docTexts: Map<String, String> = emptyMap(), // извлечённое содержимое приложенного файла (ключ = запись из docs); «(… не извлечён)» = скан/не PDF
     val pending: List<String> = emptyList(),  // документы, отложенные «приложу позже» (надо дозагрузить)
     val note: String = "",                    // замечание валидатора при возврате на доработку
     val revises: Int = 0,                     // сколько раз валидатор уже отправлял на доработку (лимит петли)
@@ -90,8 +91,17 @@ data class TaskContext(
             done.forEach { append("  - ").append(it).append('\n') }
         }
         if (docs.isNotEmpty()) {
-            append("Документы (приложены пользователем):\n")
-            docs.forEach { append("  - ").append(it).append('\n') }
+            append("Документы (приложены пользователем)")
+            if (docTexts.values.any { it.isNotBlank() }) {
+                append(" — ниже извлечённое содержимое; сверяй ФИО/даты с досье и между документами")
+            }
+            append(":\n")
+            docs.forEach { entry ->
+                append("  - ").append(entry).append('\n')
+                docTexts[entry]?.trim()?.takeIf { it.isNotBlank() }?.let {
+                    append("      содержимое: ").append(it.take(DOC_TEXT_CAP)).append('\n')
+                }
+            }
         }
         if (pending.isNotEmpty()) {
             append("Ожидают загрузки (пользователь приложит позже — учитывай как незавершённое):\n")
@@ -109,6 +119,9 @@ data class TaskContext(
     }
 
     companion object {
+        /** Предел длины показываемой в [STATE] выдержки содержимого документа (баланс «сверка / токены»). */
+        const val DOC_TEXT_CAP = 500
+
         /** Разрешённые переходы автомата — единственный источник истины (код, не LLM). */
         val TRANSITIONS: Map<TaskState, Set<TaskState>> = mapOf(
             TaskState.INTAKE to setOf(TaskState.PLANNING),

@@ -60,6 +60,7 @@ internal data class TaskContextDto(
     val step: Int = 0,
     val done: List<String> = emptyList(),
     val docs: List<String> = emptyList(),
+    val docTexts: Map<String, String> = emptyMap(),
     val pending: List<String> = emptyList(),
     val note: String = "",
     val revises: Int = 0,
@@ -152,14 +153,14 @@ internal fun TaskContextDto.toDomain() = TaskContext(
     state = TaskState.entries.firstOrNull { it.name == state } ?: TaskState.INTAKE,
     awaiting = Awaiting.entries.firstOrNull { it.name == awaiting } ?: Awaiting.NONE,
     prompt = prompt, options = options, approach = approach,
-    plan = plan, step = step, done = done, docs = docs, pending = pending, note = note, revises = revises,
+    plan = plan, step = step, done = done, docs = docs, docTexts = docTexts, pending = pending, note = note, revises = revises,
     offer = offer, interviewOffered = interviewOffered, paused = paused,
     caseFile = caseFile.toDomain(), pivotTo = pivotTo, research = research
 )
 
 internal fun TaskContext.toDto() = TaskContextDto(
     task = task, state = state.name, awaiting = awaiting.name, prompt = prompt, options = options,
-    approach = approach, plan = plan, step = step, done = done, docs = docs, pending = pending, note = note,
+    approach = approach, plan = plan, step = step, done = done, docs = docs, docTexts = docTexts, pending = pending, note = note,
     revises = revises, offer = offer, interviewOffered = interviewOffered, paused = paused,
     caseFile = caseFile.toDto(), pivotTo = pivotTo, research = research
 )
