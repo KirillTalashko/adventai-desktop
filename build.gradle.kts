@@ -36,6 +36,21 @@ dependencies {
     implementation("io.ktor:ktor-server-cio:3.1.3")
     implementation("io.ktor:ktor-server-sse:3.1.3")
     implementation("io.ktor:ktor-server-auth:3.1.3")
+
+    // DI (День 32) — Koin 4.1.1. Версия НЕ последняя намеренно: 4.2.x собран на Kotlin 2.3.20,
+    // метаданные которого компилятор проекта (2.1.21) не читает — те же грабли, что с kotlin-sdk 0.11+.
+    // 4.1.1 собран ровно на 2.1.21.
+    // Берём ТОЛЬКО koin-core: koin-compose тянет транзитивом compose-runtime/foundation 1.8.2 и
+    // рассинхронизирует их с compose.desktop.currentOs 1.7.3. Зависимости внедряются в конструкторы,
+    // а не достаются из композаблов через koinInject() — иначе Koin превращается в service locator.
+    implementation("io.insert-koin:koin-core:4.1.1")
+
+    // Тесты появились вместе с DI: Koin проверяет граф в рантайме, поэтому verify() из koin-test
+    // гоняем на сборке — иначе незакрытая зависимость всплывёт только у пользователя.
+    testImplementation(kotlin("test"))
+    testImplementation(platform("org.junit:junit-bom:5.14.4"))
+    testImplementation("io.insert-koin:koin-test:4.1.1")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 kotlin {
@@ -48,6 +63,12 @@ kotlin {
 java {
     sourceCompatibility = JavaVersion.VERSION_21
     targetCompatibility = JavaVersion.VERSION_21
+}
+
+// Тесты на JUnit Platform (JUnit 5); kotlin("test") сам подставляет вариант kotlin-test-junit5.
+//   Запуск: .\gradlew.bat test
+tasks.test {
+    useJUnitPlatform()
 }
 
 // День 16 (MCP, Вариант 2): консольная проверка — клиент подключается к локальному
@@ -150,6 +171,18 @@ tasks.register<JavaExec>("runTaskFlowCheck") {
     description = "Характеризующие проверки TaskOrchestrator (стадии/переходы) — сеть безопасности перед расшивкой ChatState"
     mainClass.set("com.example.adventdesktop.cli.TaskFlowCheckMainKt")
     classpath = sourceSets["main"].runtimeClasspath
+    jvmArgs("-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8")
+}
+
+// Аудит агента: headless-прогон сценариев (INTAKE→…→VALIDATION) с РЕАЛЬНЫМ оркестратором (облако+MCP+RAG+страж).
+// Пишет транскрипты в build/agent-audit/ для последующего судейства роем ревьюеров. -Dout=<dir> переопределяет вывод.
+//   Запуск: .\gradlew.bat runAgentProbe   (нужны: ключ DeepSeek, доступ к VPS-MCP, Ollama для RAG)
+tasks.register<JavaExec>("runAgentProbe") {
+    group = "verification"
+    description = "Аудит: прогнать «Визового специалиста» по сценариям и записать транскрипты"
+    mainClass.set("com.example.adventdesktop.cli.AgentProbeMainKt")
+    classpath = sourceSets["main"].runtimeClasspath
+    System.getProperty("out")?.let { jvmArgs("-Dout=$it") }
     jvmArgs("-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8")
 }
 

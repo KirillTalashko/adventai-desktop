@@ -26,5 +26,7 @@
 | [WEEK_7_SUBAGENTS_AND_PIPELINE.md](WEEK_7_SUBAGENTS_AND_PIPELINE.md) | дорожная карта Недели 7 (с Дня 31, последняя): субагенты (Fan-Out/Chain/Router), System Tooling, sandboxing, AI-пайплайны, авто-ревью PR (День 32), error handling, метрики, тестирование |
 | [COURSE_NOTES.md](COURSE_NOTES.md) | конспект чата курса: инсайты ведущего (агенты, память, MCP-токены, модели, opsec, карьера, ресурсы) |
 | [AST_INDEX.md](AST_INDEX.md) | структурный поиск по коду (ast-index): команды, когда использовать, авто-обновление индекса |
+| [PEER_BEST_PRACTICES.md](PEER_BEST_PRACTICES.md) | разбор 279 работ потока: частоты практик (норма/редкость), топ-репозитории, 10 приёмов к переносу, анти-паттерны, наши дыры |
+| [RESEARCH_SHEET_TO_INSIGHTS.md](RESEARCH_SHEET_TO_INSIGHTS.md) | мета-промпт: Google-таблица со ссылками → GitHub API → скоринг → выжимка практик (воронка, грабли, чек-лист) |
 
 Точка входа проекта — `../CLAUDE.md`. Мета-промпт по дизайну — `../DESIGN_BRIEF.md`.

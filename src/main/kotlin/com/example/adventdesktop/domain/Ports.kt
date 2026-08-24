@@ -82,6 +82,32 @@ interface ToolGateway {
 }
 
 /**
+ * День 32 (DI): фабрика визового MCP-шлюза. Именованный тип, а НЕ голый
+ * `(String?, String?, String?, Boolean, Boolean) -> ToolGateway`, по двум причинам:
+ *  1. Koin регистрирует провайдеры по `KClass`, а у функциональных типов аргументы стираются —
+ *     два разных `() -> ToolGateway` в графе схлопнулись бы в один `Function0`.
+ *  2. Пятерка безымянных параметров на месте вызова читается хуже, чем именованный тип.
+ * `operator fun invoke` оставляет все места вызова прежними: `toolGatewayFactory(key, url, ...)`.
+ */
+fun interface ToolGatewayFactory {
+    operator fun invoke(
+        deepseekKey: String?,
+        remoteUrl: String?,
+        remoteToken: String?,
+        includeVisa: Boolean,
+        includeExtra: Boolean,
+    ): ToolGateway
+}
+
+/**
+ * День 32 (DI): фабрика шлюза ассистента разработчика (`/help`). Отдельный тип от [ToolGatewayFactory] —
+ * иначе Koin не отличил бы их в графе (оба стёрлись бы до `FunctionN`), см. коммент выше.
+ */
+fun interface DevToolGatewayFactory {
+    operator fun invoke(): ToolGateway
+}
+
+/**
  * Порт к локальному **Skill + CLI** (День 20) — альтернатива MCP. Домен знает лишь «выполни команду нашего
  * CLI и верни текст»; запуск процесса/безопасность — в `data`. Грузится по требованию (idle = 0), в отличие
  * от MCP-схем, которые идут в каждый sampling call.

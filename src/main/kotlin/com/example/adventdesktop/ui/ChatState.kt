@@ -8,6 +8,7 @@ import com.example.adventdesktop.data.CliSkillRunner
 import com.example.adventdesktop.data.ConfigStore
 import com.example.adventdesktop.data.DesktopConfig
 import com.example.adventdesktop.data.DocStore
+import com.example.adventdesktop.data.PdfText
 import com.example.adventdesktop.data.HttpProxy
 import com.example.adventdesktop.data.InvariantStore
 import com.example.adventdesktop.data.LlmClient
@@ -74,6 +75,8 @@ import com.example.adventdesktop.domain.TokenUsage
 import com.example.adventdesktop.domain.Tool
 import com.example.adventdesktop.domain.ToolCallGuard
 import com.example.adventdesktop.domain.ToolGateway
+import com.example.adventdesktop.domain.ToolGatewayFactory
+import com.example.adventdesktop.domain.DevToolGatewayFactory
 import com.example.adventdesktop.domain.UserProfile
 import com.example.adventdesktop.domain.VISA_SYSTEM_PROMPT
 import com.example.adventdesktop.domain.VisaAgent
@@ -151,9 +154,9 @@ private const val PIPELINE_AGENT_PROMPT =
 class ChatState(
     private val accounts: AccountStore,
     private val configStore: ConfigStore,
-    private val toolGatewayFactory: (deepseekKey: String?, remoteUrl: String?, remoteToken: String?, includeVisa: Boolean, includeExtra: Boolean) -> ToolGateway,
+    private val toolGatewayFactory: ToolGatewayFactory,
     /** День 31: отдельный MCP-гейтвей ассистента разработчика (git-инструменты по проекту). */
-    private val devToolGatewayFactory: () -> ToolGateway,
+    private val devToolGatewayFactory: DevToolGatewayFactory,
     private val scope: CoroutineScope
 ) {
     // --- глобальное (общее для аккаунтов) ---
@@ -665,10 +668,11 @@ class ChatState(
         val saved = ds.save(file) ?: run { error = "Не удалось сохранить файл"; return }
         val label = if (ctx.awaiting == Awaiting.DOCUMENT && ctx.prompt.isNotBlank()) ctx.prompt else saved
         val entry = "$label → $saved"
+        val docText = PdfText.extract(file)   // content-aware: пайплайн увидит содержимое (сверка ФИО/дат), а не только метку
         // Снять из «ожидают загрузки», если этот документ откладывали ранее.
         val pending = ctx.pending.filterNot { label.isNotBlank() && it.contains(label, ignoreCase = true) }
         val updated = conv.withMessage(Message(Role.User, "Приложен документ: $saved ($label)"))
-            .copy(task = ctx.copy(docs = ctx.docs + entry, pending = pending, awaiting = Awaiting.NONE, prompt = ""))
+            .copy(task = ctx.copy(docs = ctx.docs + entry, docTexts = ctx.docTexts + (entry to docText), pending = pending, awaiting = Awaiting.NONE, prompt = ""))
         current = updated
         repo.save(updated)
         refreshList()
@@ -711,8 +715,10 @@ class ChatState(
         val ds = docStore ?: return
         if (loading) return
         val saved = ds.save(file) ?: run { error = "Не удалось сохранить файл"; return }
+        val entry = "$label → $saved"
+        val docText = PdfText.extract(file)
         val updated = conv.withMessage(Message(Role.User, "Приложен документ: $saved ($label)"))
-            .copy(task = ctx.copy(docs = ctx.docs + "$label → $saved", pending = ctx.pending - label))
+            .copy(task = ctx.copy(docs = ctx.docs + entry, docTexts = ctx.docTexts + (entry to docText), pending = ctx.pending - label))
         current = updated
         repo.save(updated)
         refreshList()
