@@ -121,6 +121,9 @@ internal data class AppConfigDto(
     val reducedMotion: Boolean = false,
     // HTTP-прокси для запросов приложения (LLM + удалённый MCP); пусто → прямое соединение.
     val httpProxy: String = "",
+    // Режим управления контекстом (селектор «Память» в композере). Строкой, а не ordinal: переживает
+    // перестановку значений enum. Пусто/неизвестное → auto (сегодняшнее поведение).
+    val memoryMode: String = "auto",
 )
 
 // --- мапперы DTO <-> domain ---

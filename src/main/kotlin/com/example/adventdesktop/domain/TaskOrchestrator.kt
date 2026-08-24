@@ -42,7 +42,7 @@ class TaskOrchestrator(
     private val gateway: LlmGateway,
     private val guard: InvariantGuard? = null,
     private val basePrompt: String = VISA_SYSTEM_PROMPT,
-    private val windowSize: Int = 12,
+    private val windowSize: Int = STAGE_WINDOW,
     private val tools: ToolGateway? = null,
     /** Досмотр исходящих tool-calls ПЕРЕД исполнением (защита от «логических бомб»). null = без досмотра. */
     private val toolGuard: ToolCallGuard? = null,
@@ -74,6 +74,13 @@ class TaskOrchestrator(
      * безопасные правила. Заполняется [ChatState] из локального стора одобренных пользователем добавок.
      */
     var promptOverrides: Map<String, List<String>> = emptyMap()
+
+    /**
+     * Режим памяти (селектор «Память» в композере). Ставит [ChatState]; null → сегодняшнее поведение
+     * (последние N реплик стадии, без блоков памяти диалога) — поэтому оркестратор, созданный мимо UI
+     * (харнессы в `cli/`), работает как раньше без единой правки.
+     */
+    var memory: MemorySupplier? = null
 
     /**
      * Писарь досье (День 18): детерминированно заполняет [CaseFile] из слов пользователя на стадии INTAKE.
@@ -466,6 +473,15 @@ class TaskOrchestrator(
         ragBlock: String = "",
         params: LlmParams = LlmParams(temperature = TEMP_DEFAULT),
     ): GatewayResponse {
+        // Память стадии по выбранному режиму. Стадийные лимиты (EXECUTION 6, ASSIST 8) — поведенческий
+        // предохранитель («не идти за инерцией истории»), а не бюджет токенов: режим не вправе его снимать,
+        // поэтому окно режима дополнительно режется, если стадия задала лимит жёстче общего окна.
+        val supplied = memory?.supply(history, historyLimit)
+            ?: MemoryWindow("", history.takeLast(historyLimit), (history.size - historyLimit).coerceAtLeast(0))
+        val win = if (historyLimit < windowSize && supplied.history.size > historyLimit)
+            supplied.copy(history = supplied.history.takeLast(historyLimit))
+        else supplied
+
         val system = buildString {
             append(basePrompt)
             // Текущая дата: без неё модель считает год по памяти (выдаёт сроки в прошлом). Источник истины — часы.
@@ -482,6 +498,8 @@ class TaskOrchestrator(
             append("\n\n").append(ctx.renderStateBlock())
             // День 25: RAG — выдержки из внутренней базы знаний (аддитивно к MCP/[СПРАВКА]).
             if (ragBlock.isNotBlank()) append("\n\n").append(ragBlock)
+            // Память диалога (режим «Память» в композере): уровни/факты старого хвоста.
+            if (win.block.isNotBlank()) append("\n\n").append(win.block)
             val inv = renderInvariantsBlock(invariants)
             if (inv.isNotEmpty()) append("\n\n").append(inv)
             if (profile != null) {
@@ -496,7 +514,7 @@ class TaskOrchestrator(
         }
         val messages = buildList {
             add(Message(Role.System, system))
-            addAll(history.takeLast(historyLimit))
+            addAll(win.history)
             add(Message(Role.User, instruction))
         }
         // Фаза 2: на «отвечающих» стадиях даём модели MCP-инструменты; tool-loop ведёт LlmClient.

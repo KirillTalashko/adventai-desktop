@@ -106,9 +106,11 @@ import java.awt.Desktop
 import java.net.URI
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.adventdesktop.data.LocalRun
 import com.example.adventdesktop.data.Models
 import com.example.adventdesktop.domain.Awaiting
+import com.example.adventdesktop.domain.MemoryMode
 import com.example.adventdesktop.domain.Message
 import com.example.adventdesktop.domain.Role
 import com.example.adventdesktop.domain.TokenUsage
@@ -235,8 +237,9 @@ private fun Sidebar(
         }
 
         Text(
-            "Диалоги",
+            "ДИАЛОГИ",
             style = MaterialTheme.typography.labelSmall,
+            letterSpacing = 0.8.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = Space.sm, top = Space.xs)
         )
@@ -542,13 +545,15 @@ private fun Composer(state: ChatState) = ReadingColumn {
                         IconActionButton(Icons.Outlined.Memory, "Локальная LLM", { state.localLlm.openLocalLlm() })
                     }
                     DropdownChip(state.model.title, Models.all, { it.title }) { state.chooseModel(it) }
+                    // Раскладка DESIGN_BRIEF.md §Раскладка: под полем — выбор модели И выбор режима памяти.
+                    MemoryChip(state)
                     // День 27 — визуальный маркер: выбрана локальная модель → чат работает без облака.
                     if (state.model.local) {
                         Text(
-                            "⚡ локально · без облака",
+                            "⚡ локально",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold,
-                            color = AppColors.accent
+                            color = AppColors.accentText
                         )
                     }
                     Spacer(Modifier.weight(1f))
@@ -565,12 +570,25 @@ private fun Composer(state: ChatState) = ReadingColumn {
                 }
             }
         }
-        Text(
-            if (state.hasKey) "Enter — отправить · Shift+Enter — перенос" else "Нет ключа — откройте «Настройки» или задайте переменную окружения",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = Space.sm, start = Space.lg)
-        )
+        Row(
+            Modifier.padding(top = Space.sm, start = Space.lg),
+            horizontalArrangement = Arrangement.spacedBy(Space.xs),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                if (state.hasKey) "Enter — отправить · Shift+Enter — перенос" else "Нет ключа — откройте «Настройки» или задайте переменную окружения",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            // Эффект режима памяти виден сразу при выборе, а не после следующей отправки.
+            if (state.memoryDropped > 0) {
+                Text(
+                    "· вне окна: ${state.memoryDropped} реплик",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = StatusColors.missing
+                )
+            }
+        }
     }
 }
 
@@ -1765,6 +1783,60 @@ private fun ExpandableText(text: String, collapsedLines: Int = 6) {
                 style = MaterialTheme.typography.labelSmall,
                 color = AppColors.accentText,
             )
+        }
+    }
+}
+
+/**
+ * Чип режима памяти (DESIGN_BRIEF.md §Раскладка/§Память). Отдельный композабл, а не [DropdownChip]:
+ * у пунктов две строки — название и пояснение, что режим сделает с диалогом. Без пояснения выбор из
+ * пяти режимов управления контекстом был бы вслепую.
+ */
+@Composable
+private fun MemoryChip(state: ChatState) {
+    var open by remember { mutableStateOf(false) }
+    val mode = state.config.memoryMode
+    Box {
+        Surface(
+            onClick = { open = true },
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            shape = CircleShape
+        ) {
+            Row(
+                Modifier.padding(start = Space.md, end = Space.sm, top = 6.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    "Память: ${mode.chip}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1
+                )
+                Icon(Icons.Filled.KeyboardArrowDown, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        DropdownMenu(open, { open = false }) {
+            MemoryMode.entries.forEach { item ->
+                val active = item == mode
+                DropdownMenuItem(
+                    text = {
+                        Column(Modifier.widthIn(max = 360.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                item.title + if (active) "  ✓" else "",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = if (active) AppColors.accentText else MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                item.hint,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    },
+                    onClick = { state.chooseMemoryMode(item); open = false }
+                )
+            }
         }
     }
 }

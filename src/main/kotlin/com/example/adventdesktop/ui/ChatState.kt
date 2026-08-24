@@ -48,6 +48,14 @@ import com.example.adventdesktop.domain.ConversationRepository
 import com.example.adventdesktop.domain.DevAssistant
 import com.example.adventdesktop.domain.LongTermMemory
 import com.example.adventdesktop.domain.MemoryExtractor
+import com.example.adventdesktop.domain.Derived
+import com.example.adventdesktop.domain.MemoryMode
+import com.example.adventdesktop.domain.MemoryPlanner
+import com.example.adventdesktop.domain.MemorySupplier
+import com.example.adventdesktop.domain.MemoryWindow
+import com.example.adventdesktop.domain.STAGE_WINDOW
+import com.example.adventdesktop.domain.WINDOW_N
+import com.example.adventdesktop.domain.renderMemoryLevels
 import com.example.adventdesktop.domain.LlmParams
 import com.example.adventdesktop.domain.MemoryStore
 import com.example.adventdesktop.domain.Message
@@ -86,6 +94,13 @@ private const val EXTRACT_WINDOW = 4
 
 /** Предел авто-продвижения стадий за один запуск (защита от зацикливания, напр. бесконечного revise). */
 private const val MAX_AUTO_CHAIN = 16
+
+/** Реальное окно локальных моделей: num_ctx в Ollama не отправляется, `contextLimit` из Models.kt там фикция. */
+private const val LOCAL_CTX_TOKENS = 8_192
+
+/** ~3 символа кириллицы на токен и половина окна под историю (вторая — system-промпт и ответ). */
+private const val FULL_CHARS_PER_TOKEN = 3
+private const val FULL_SAFE_FRACTION = 0.5
 
 /** День 19: один шаг пайплайна композиции MCP-инструментов — для показа цепочки и передачи данных в UI. */
 data class PipelineStep(val tool: String, val title: String, val output: String, val ok: Boolean)
@@ -151,6 +166,10 @@ class ChatState(
     private var orchestrator: TaskOrchestrator? = null
     private var extractorClient: LlmClient? = null
     private var memoryExtractor: MemoryExtractor? = null
+    /** Планировщик контекста под выбранный режим памяти (селектор «Память» в композере). */
+    private var memoryPlanner: MemoryPlanner? = null
+    /** Кэш свёртки хвоста, готовый к записи: id диалога → derived (сохраняется в своём же диалоге). */
+    private var pendingDerived: Pair<String, Derived>? = null
     private var offerAgent: OfferAgent? = null
     private var interviewAgent: MockInterviewAgent? = null
     /** Постоянный MCP-гейтвей для оркестратора (Фаза 2): инструменты интервьюеру/ассистенту. */
@@ -1036,6 +1055,31 @@ class ChatState(
         rebuildAgent()
     }
 
+    /**
+     * Сколько реплик текущего диалога останется ЗА окном выбранного режима. Считается арифметикой
+     * (без обращения к модели) сразу при выборе режима — иначе эффект был бы виден только после
+     * следующей отправки.
+     */
+    var memoryDropped by mutableStateOf(0)
+        private set
+
+    /** Режим памяти. Пересборка агента не нужна: режим читается в момент запроса. */
+    fun chooseMemoryMode(mode: MemoryMode) {
+        config = config.copy(memoryMode = mode)
+        configStore.save(config)
+        memoryDropped = previewDropped(mode)
+    }
+
+    /** Превью «за окном» без вызовов модели: для «Авто»/«Вся история» — 0, для окна — арифметика. */
+    private fun previewDropped(mode: MemoryMode): Int {
+        val size = current?.messages?.size ?: 0
+        return when (mode) {
+            MemoryMode.Window -> (size - WINDOW_N).coerceAtLeast(0)
+            MemoryMode.Facts, MemoryMode.Summary -> (size - STAGE_WINDOW).coerceAtLeast(0)
+            MemoryMode.Auto, MemoryMode.Full -> 0
+        }
+    }
+
     /** Режим разработчика: только видимость инженерных витрин (без пересборки агента). */
     fun setDeveloperMode(value: Boolean) {
         config = config.copy(developerMode = value)
@@ -1294,6 +1338,38 @@ class ChatState(
     private fun docTitleFromFile(file: String): String =
         file.substringBeforeLast('.').replace('-', ' ').replaceFirstChar { it.uppercase() }
 
+    /**
+     * Память стадии под выбранный режим (порт [MemorySupplier]). Кэш свёрток возвращаем не через
+     * поле, а складываем вместе с id диалога — иначе при ошибке стадии он утёк бы в другой диалог.
+     */
+    private suspend fun supplyMemory(history: List<Message>, limit: Int): MemoryWindow {
+        val planner = memoryPlanner
+        val fallback = MemoryWindow("", history.takeLast(limit), (history.size - limit).coerceAtLeast(0))
+        if (planner == null) return fallback
+        val conv = current ?: return fallback
+        val plan = planner.plan(
+            mode = config.memoryMode,
+            history = history,
+            derived0 = conv.derived,
+            contextFill = contextFill,
+            limit = limit,
+            charBudget = fullHistoryCharBudget(),
+        )
+        if (plan.derived != conv.derived) pendingDerived = conv.id to plan.derived
+        memoryDropped = plan.dropped
+        return MemoryWindow(renderMemoryLevels(plan.strategic, plan.tactical), plan.history, plan.dropped)
+    }
+
+    /**
+     * Бюджет символов режима «Вся история». От `contextLimit` локальных моделей считать нельзя: он
+     * объявлен в `Models.kt`, но `num_ctx` в Ollama не отправляется — реальное окно там куда меньше.
+     * Половина окна отдаётся истории (вторая — system-промпту и ответу), ~3 символа кириллицы на токен.
+     */
+    private fun fullHistoryCharBudget(): Int {
+        val tokens = if (model.local) LOCAL_CTX_TOKENS else model.contextLimit
+        return (tokens * FULL_CHARS_PER_TOKEN * FULL_SAFE_FRACTION).toInt()
+    }
+
     private fun runStage(firstAction: suspend (TaskOrchestrator, TaskContext, List<Message>, UserProfile?) -> Result<TaskStep>) {
         val conv0 = current ?: return
         val repo = conversations ?: return
@@ -1313,7 +1389,11 @@ class ChatState(
                 val act = next ?: break
                 val ctx = conv.task ?: break
                 val result = act(orch, ctx, conv.messages, userProfile)
-                if (result.isFailure) { error = result.exceptionOrNull()?.message ?: "Ошибка запроса"; break }
+                if (result.isFailure) {
+                    pendingDerived = null
+                    error = result.exceptionOrNull()?.message ?: "Ошибка запроса"
+                    break
+                }
                 val taskStep = result.getOrThrow()
                 var updated = conv
                 if (taskStep.reply.text.isNotBlank()) {
@@ -1323,6 +1403,9 @@ class ChatState(
                 }
                 // cancel — простой вопрос: ответ дан, режим задачи снимаем (свободный чат).
                 updated = updated.copy(task = if (taskStep.cancel) null else taskStep.context)
+                // Кэш свёртки хвоста — только для СВОЕГО диалога; иначе платная свёртка повторялась бы каждый ход.
+                pendingDerived?.let { (id, d) -> if (id == updated.id) updated = updated.copy(derived = d) }
+                pendingDerived = null
                 if (current?.id == updated.id) current = updated
                 repo.save(updated)
                 refreshList()
@@ -1460,6 +1543,10 @@ class ChatState(
         extractorClient = extractorLlm?.let { LlmClient(it) }
         val serviceGateway = if (model.local) client else extractorClient
         memoryExtractor = serviceGateway?.let { MemoryExtractor(it) }
+        // Свёртка хвоста — механика (P3): дешёвый служебный шлюз; при локальной модели это та же локаль.
+        // Фолбэк на основной шлюз: у пользователя только с ключом OpenRouter serviceGateway = null,
+        // и без фолбэка режимы «Ключевые факты»/«Краткий пересказ» молча не работали бы.
+        memoryPlanner = (serviceGateway ?: client)?.let { MemoryPlanner(it) }
         val guard = serviceGateway?.let { InvariantGuard(it) }
         offerAgent = serviceGateway?.let { OfferAgent(it) }
 
@@ -1476,7 +1563,12 @@ class ChatState(
         agent = client?.let { VisaAgent(it, guard) }
         // День 25: RAG в агенте — ретривер по внутренней базе знаний (детерминированно, без LLM). Тумблер в настройках.
         val retriever = if (config.ragInAgentEnabled) RagKnowledgeRetriever(knowledge(), ::ragQueryEmbedder, AGENT_RAG_OPTIONS) else null
-        orchestrator = client?.let { TaskOrchestrator(it, guard, tools = agentTools, toolGuard = ToolCallGuard(), serviceGateway = serviceGateway, retriever = retriever).apply { invariants = this@ChatState.invariants } }
+        orchestrator = client?.let { TaskOrchestrator(it, guard, tools = agentTools, toolGuard = ToolCallGuard(), serviceGateway = serviceGateway, retriever = retriever).apply {
+            invariants = this@ChatState.invariants
+            // Режим читается ВНУТРИ supply в момент запроса, поэтому переключение чипа не требует
+            // rebuildAgent() (он закрывает HTTP-клиенты и MCP-подпроцессы).
+            memory = MemorySupplier { history, limit -> supplyMemory(history, limit) }
+        } }
         interviewAgent = client?.let { MockInterviewAgent(it) }
         // День 20: навык (Skill + CLI). CLI читает активный аккаунт сам (accounts.json), поэтому id не пробрасываем.
         val runner = CliSkillRunner(accountId = null)

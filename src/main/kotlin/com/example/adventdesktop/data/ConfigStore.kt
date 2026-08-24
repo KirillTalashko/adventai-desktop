@@ -1,5 +1,6 @@
 package com.example.adventdesktop.data
 
+import com.example.adventdesktop.domain.MemoryMode
 import java.io.File
 
 /** Настройки приложения, редактируемые в UI. Хранит оба ключа — провайдер выбирается моделью. */
@@ -26,6 +27,8 @@ data class DesktopConfig(
     // HTTP-прокси для всех запросов приложения (LLM + удалённый MCP). Для сетей с локальным туннелем,
     // где прямой выход/DNS закрыты (напр. http://127.0.0.1:10809). Пусто → прямое соединение.
     val httpProxy: String = "",
+    // Режим управления контекстом (селектор «Память» в композере). Дефолт = сегодняшнее поведение.
+    val memoryMode: MemoryMode = MemoryMode.Auto,
 ) {
     fun keyFor(provider: String): String = if (provider == "deepseek") deepseekKey else openrouterKey
 }
@@ -59,6 +62,7 @@ class ConfigStore(private val store: FileStore) {
             darkTheme = dto.darkTheme,
             reducedMotion = dto.reducedMotion,
             httpProxy = dto.httpProxy.ifBlank { System.getenv("HTTPS_PROXY") ?: System.getenv("HTTP_PROXY").orEmpty() }.trim(),
+            memoryMode = MemoryMode.byId(dto.memoryMode),
         )
     }
 
@@ -81,6 +85,7 @@ class ConfigStore(private val store: FileStore) {
                     darkTheme = config.darkTheme,
                     reducedMotion = config.reducedMotion,
                     httpProxy = config.httpProxy,
+                    memoryMode = config.memoryMode.name.lowercase(),
                 )
             )
         )

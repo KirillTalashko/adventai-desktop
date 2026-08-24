@@ -60,8 +60,8 @@ data class AgentTurn(val reply: AgentReply, val derived: Derived)
 
 /**
  * Доменная сущность агента: единый под-капотом конвейер памяти ([ContextAssembler]) + обращение к
- * [LlmGateway]. Управление контекстом автоматическое (без режимов): слои памяти + авто-резюме при
- * заполнении окна. Не знает ни про UI, ни про HTTP, ни про файлы (Clean Architecture).
+ * [LlmGateway]. Объём истории и блоки памяти выбирает [MemoryMode] (по умолчанию [MemoryMode.Auto] —
+ * слои памяти + авто-резюме при заполнении окна). Не знает ни про UI, ни про HTTP, ни про файлы (Clean Architecture).
  */
 class VisaAgent(
     private val gateway: LlmGateway,
@@ -77,9 +77,10 @@ class VisaAgent(
         longTerm: LongTermMemory,
         profile: UserProfile?,
         invariants: List<Invariant>,
-        contextFill: Float
+        contextFill: Float,
+        mode: MemoryMode = MemoryMode.Auto,
     ): Result<AgentTurn> = runCatchingCancellable {
-        val assembled = assembler.assemble(conversation, working, longTerm, profile, invariants, contextFill)
+        val assembled = assembler.assemble(conversation, working, longTerm, profile, invariants, contextFill, mode)
         var response = gateway.complete(assembled.messages)
         // Двойная защита (День 14): пост-проверка стража; при нарушении — перегенерация в обоснованный отказ.
         val violation = guard?.check(response.text, invariants)

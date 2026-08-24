@@ -134,6 +134,17 @@ tasks.register<JavaExec>("runRagCountryCheck") {
 
 // A1 (сеть безопасности рефакторинга): характеризующий харнесс потока задачи (TaskOrchestrator), без сети.
 //   Запуск: .\gradlew.bat runTaskFlowCheck
+// Режимы памяти (селектор «Память» в композере): что каждый режим кладёт в запрос, сколько реплик
+// выбрасывает и сколько платных свёрток делает. Детерминированно, без сети.
+//   Запуск: .\gradlew.bat runMemoryModeCheck
+tasks.register<JavaExec>("runMemoryModeCheck") {
+    group = "verification"
+    description = "Проверить режимы памяти: окно истории, блоки памяти, число свёрток"
+    mainClass.set("com.example.adventdesktop.cli.MemoryModeCheckMainKt")
+    classpath = sourceSets["main"].runtimeClasspath
+    jvmArgs("-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8")
+}
+
 tasks.register<JavaExec>("runTaskFlowCheck") {
     group = "verification"
     description = "Характеризующие проверки TaskOrchestrator (стадии/переходы) — сеть безопасности перед расшивкой ChatState"
