@@ -27,7 +27,7 @@ class FileStore(val root: File) {
 }
 
 /** Каталог данных приложения: `<home>/.adventai`. */
-internal fun appHomeDir(): File {
+fun appHomeDir(): File {
     val home = System.getProperty("user.home") ?: "."
     return File(home, ".adventai")
 }

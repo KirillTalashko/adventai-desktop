@@ -19,7 +19,7 @@ private fun words(text: String): List<Word> =
     WORD.findAll(text).map { Word(it.range.first, it.range.last + 1) }.toList()
 
 /** Грубая оценка токенов ≈ число слов (единый счёт для отчёта о размере чанков). */
-internal fun approxTokens(text: String): Int = if (text.isBlank()) 0 else WORD.findAll(text).count()
+fun approxTokens(text: String): Int = if (text.isBlank()) 0 else WORD.findAll(text).count()
 
 /**
  * **Стратегия 1 — фиксированный размер.** Скользящее окно по [targetTokens] слов с перекрытием

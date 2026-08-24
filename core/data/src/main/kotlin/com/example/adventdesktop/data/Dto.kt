@@ -27,7 +27,7 @@ internal val appJson = Json {
     encodeDefaults = true
 }
 
-internal fun nowMs(): Long = System.currentTimeMillis()
+fun nowMs(): Long = System.currentTimeMillis()
 
 @Serializable
 internal data class UsageDto(val prompt: Int = 0, val completion: Int = 0, val total: Int = 0)

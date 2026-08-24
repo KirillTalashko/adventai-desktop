@@ -19,7 +19,7 @@ data class TaskStep(val reply: AgentReply, val context: TaskContext, val cancel:
  * Bug: kotlin-diagnostics). Если на границе висит начатый, но не завершённый пробелом URL — откатываемся до его
  * начала (лучше опустить ссылку, чем дать обрезок). `internal` — чтобы покрыть характеризующим харнессом.
  */
-internal fun capText(s: String, cap: Int, tail: String): String {
+fun capText(s: String, cap: Int, tail: String): String {
     val t = s.trim()
     if (t.length <= cap) return t
     val head = t.substring(0, cap)
