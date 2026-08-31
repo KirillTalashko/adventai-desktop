@@ -26,4 +26,13 @@ dependencies {
             rootProject.file("libs/commons-logging-1.2.jar"),
         )
     )
+
+    testImplementation(kotlin("test"))
+    testImplementation(platform(libs.junit.bom))
+    testRuntimeOnly(libs.junit.platform.launcher)
+}
+
+// Тесты на JUnit Platform (JUnit 5) — как в :app. Запуск: .\gradlew.bat :core:data:test
+tasks.test {
+    useJUnitPlatform()
 }

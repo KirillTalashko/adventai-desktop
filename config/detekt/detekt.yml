@@ -1,0 +1,48 @@
+# B3 (.claude/MODULARIZATION.md) — detekt как fitness-функция трека расшивки god-object'ов.
+# Включены ТОЛЬКО правила сложности: это метрика, ради которой идёт весь трек. Стилистические
+# рулсеты выключены сознательно — иначе 14k строк дадут тысячи находок и сигнал утонет.
+
+build:
+  maxIssues: 0
+
+comments: { active: false }
+coroutines: { active: false }
+empty-blocks: { active: false }
+exceptions: { active: false }
+naming: { active: false }
+performance: { active: false }
+potential-bugs: { active: false }
+style: { active: false }
+
+complexity:
+  active: true
+  # Порог 600 строк: App.kt и ChatState.kt заведомо выше — это и есть измеряемый долг.
+  LargeClass:
+    active: true
+    threshold: 600
+  LongMethod:
+    active: true
+    threshold: 60
+  TooManyFunctions:
+    active: true
+    thresholdInFiles: 30
+    thresholdInClasses: 30
+    thresholdInInterfaces: 30
+    thresholdInObjects: 30
+    thresholdInEnums: 30
+    ignoreDeprecated: true
+    ignorePrivate: false
+    ignoreOverridden: true
+  # Остальное из complexity — выключено: не про god-object.
+  CognitiveComplexMethod: { active: false }
+  ComplexCondition: { active: false }
+  ComplexInterface: { active: false }
+  CyclomaticComplexMethod: { active: false }
+  LabeledExpression: { active: false }
+  LongParameterList: { active: false }
+  MethodOverloading: { active: false }
+  NamedArguments: { active: false }
+  NestedBlockDepth: { active: false }
+  NestedScopeFunctions: { active: false }
+  ReplaceSafeCallChainWithRun: { active: false }
+  StringLiteralDuplication: { active: false }

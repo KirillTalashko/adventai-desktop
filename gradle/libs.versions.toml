@@ -16,6 +16,9 @@ sqlite = "3.49.1.0"
 slf4j = "2.0.16"
 junit = "5.14.4"
 shadow = "8.3.6"
+# B3 — гейт границ и метрики god-object.
+detekt = "1.23.8"          # 1.23.x собран на Kotlin 1.9; правила сложности типы не резолвят — совместим
+moduleGraphAssert = "2.9.1"
 
 [libraries]
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -35,6 +38,7 @@ mcp-sdk = { module = "io.modelcontextprotocol:kotlin-sdk", version.ref = "mcp" }
 slf4j-nop = { module = "org.slf4j:slf4j-nop", version.ref = "slf4j" }
 sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlite" }
 
+detekt-gradlePlugin = { module = "io.gitlab.arturbosch.detekt:detekt-gradle-plugin", version.ref = "detekt" }
 kotlin-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 
 koin-core = { module = "io.insert-koin:koin-core", version.ref = "koin" }
@@ -56,3 +60,4 @@ kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", versi
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 compose = { id = "org.jetbrains.compose", version.ref = "compose" }
 shadow = { id = "com.gradleup.shadow", version.ref = "shadow" }
+moduleGraphAssert = { id = "com.jraska.module.graph.assertion", version.ref = "moduleGraphAssert" }
