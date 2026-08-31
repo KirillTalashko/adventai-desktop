@@ -87,7 +87,7 @@
 | Загрузчик по требованию | `data/SkillDocs.kt` (`getResourceAsStream("skills/$name.md")`) |
 | Порт | `domain/Ports.kt` → `interface SkillRunner { suspend fun run(command): String }` |
 | Раннер CLI | `data/CliSkillRunner.kt` (ProcessBuilder, whitelist `visa-cli`, без shell, UTF-8) |
-| CLI-бинарь | `cli/VisaCliMain.kt` (`docs`, `docs check`, `prompt-tune …`, `version`) |
+| CLI-бинарь | `cli/VisaCliMain.kt` (`docs`, `docs check` — скоуп по `--conv <id>`; `prompt-tune …`, `version`) |
 | Движок | `domain/SkillEngine.kt` (парсинг `[CLI]`, цикл, счёт токенов) |
 | Fat-jar CLI | `build.gradle.kts` → задача `visaCliJar` (Main-Class `…cli.VisaCliMainKt`) |
 | Проводка/демо | `ui/ChatState.kt` (`CliSkillRunner`, `SkillEngine`, `commentOnDocsViaSkill`) |

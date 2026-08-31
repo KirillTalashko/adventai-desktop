@@ -10,11 +10,17 @@ import com.example.adventdesktop.domain.runCatchingCancellable
  * Реализация [SkillRunner] (День 20): выполняет наш локальный `visa-cli` отдельным JVM-процессом на текущем
  * classpath (как [McpClient] поднимает локальный сервер). **Безопасность:** исполняем ИСКЛЮЧИТЕЛЬНО `visa-cli`
  * (whitelist), запускаем напрямую через [ProcessBuilder] БЕЗ shell — никакой интерполяции и произвольных
- * команд, поэтому «логическую бомбу» в аргументах исполнить нельзя. Активный аккаунт прокидываем `--account`.
+ * команд, поэтому «логическую бомбу» в аргументах исполнить нельзя. Активный аккаунт прокидываем `--account`,
+ * текущий диалог — `--conv`.
  *
  * @param accountId аккаунт, чьи данные читает CLI; подставляется, если модель не указала `--account`.
+ * @param conversationId id ОТКРЫТОГО диалога — скоуп документов текущего дела. Читается в момент вызова
+ *   (диалог переключается чаще, чем пересобирается агент). Без него CLI отдал бы архив всех прошлых дел.
  */
-class CliSkillRunner(private val accountId: String?) : SkillRunner {
+class CliSkillRunner(
+    private val accountId: String?,
+    private val conversationId: () -> String? = { null },
+) : SkillRunner {
 
     override suspend fun run(command: String): String = withContext(Dispatchers.IO) {
         val trimmed = command.trim().removePrefix("`").removeSuffix("`").trim()
@@ -27,6 +33,9 @@ class CliSkillRunner(private val accountId: String?) : SkillRunner {
         val args = splitArgs(rest).toMutableList()
         if (accountId != null && "--account" !in args) {
             args += listOf("--account", accountId)
+        }
+        conversationId()?.takeIf { it.isNotBlank() }?.let { conv ->
+            if ("--conv" !in args) args += listOf("--conv", conv)
         }
         val javaBin = File(File(System.getProperty("java.home"), "bin"), "java").absolutePath
         val classpath = System.getProperty("java.class.path")

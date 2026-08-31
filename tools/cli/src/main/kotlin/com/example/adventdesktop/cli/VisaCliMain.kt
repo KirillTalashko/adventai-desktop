@@ -14,7 +14,7 @@ import com.example.adventdesktop.domain.TunableRole
  * без сети и без shell, чтобы это нельзя было превратить в «логическую бомбу».
  *
  * Команды (растут по мере Дня 20):
- *  - `docs [list]`  — список приложенных документов аккаунта (`DocStore`).
+ *  - `docs [list]`  — список документов текущего дела (`DocStore`, скоуп по `--conv <id>`).
  *  - `version`, `help`.
  */
 fun main(args: Array<String>) {
@@ -36,7 +36,7 @@ private val USAGE = """
     Использование: visa-cli <команда> [опции]
 
     Команды:
-      docs [list]                       список приложенных документов аккаунта
+      docs [list]                       список документов текущего дела (см. --conv)
       docs check                        содержимое документов (для сверки: один ли заявитель)
       prompt-tune collect               сигналы из диалогов для улучшения промтов
       prompt-tune apply --role <id> --add "<текст>" [--reason "<r>"]   добавить персонализацию роли
@@ -47,6 +47,7 @@ private val USAGE = """
 
     Опции:
       --account <id>     id аккаунта (по умолчанию — активный из ~/.adventai/accounts.json)
+      --conv <id>        id диалога: документы ТЕКУЩЕГО дела; без него — архив прошлых дел
 """.trimIndent()
 
 /** Разбор опций вида `--key value` (остальные позиционные аргументы игнорируем). */
@@ -69,6 +70,11 @@ private fun parseOpts(args: Array<String>): Map<String, String> {
 private fun resolveAccountId(opts: Map<String, String>, accounts: AccountStore): String? =
     opts["account"]?.ifBlank { null } ?: accounts.state().activeId.ifBlank { null }
 
+/**
+ * Документы. Скоуп — ТЕКУЩЕЕ ДЕЛО: с `--conv <id>` читаем только `docs/<convId>/`. Без `--conv` отдаём архив
+ * аккаунта (файлы прошлых поездок) с явной пометкой, что к текущему делу они отношения не имеют, — иначе
+ * агент сверяет испанскую поездку с британской бронью полугодовой давности.
+ */
 private fun docsCommand(sub: String, opts: Map<String, String>) {
     if (sub.isNotEmpty() && sub != "list" && sub != "check") {
         println("docs: неизвестная подкоманда «$sub» (доступно: list, check)")
@@ -78,21 +84,27 @@ private fun docsCommand(sub: String, opts: Map<String, String>) {
     val id = resolveAccountId(opts, accounts) ?: run {
         println("Аккаунт не найден. Укажите --account <id>."); return
     }
-    val files = accounts.docs(id).list()
+    val convId = opts["conv"]?.ifBlank { null }
+    val store = accounts.docs(id)
+    val files = if (convId != null) store.list(convId) else store.listArchive()
+    val scope =
+        if (convId != null) "текущего дела (диалог $convId)"
+        else "АРХИВА аккаунта $id — это файлы ПРОШЛЫХ дел, к текущей поездке они отношения не имеют"
     if (files.isEmpty()) {
-        println("Документы не приложены (аккаунт $id).")
+        println("Документы не приложены — $scope.")
         return
     }
     if (sub == "check") {
         // Содержимое каждого файла — чтобы агент сверил ФИО/даты (один ли заявитель).
-        println("Содержимое приложенных документов (аккаунт $id): ${files.size}")
+        println("Содержимое документов $scope: ${files.size}")
+        println("ВАЖНО: имя файла — НЕ доказательство. ФИО, даты и страну бери ТОЛЬКО из текста ниже.")
         files.forEach { f ->
             println("=== ${f.name} (${humanSize(f.length())}) ===")
             println(com.example.adventdesktop.data.PdfText.extract(f))
         }
         return
     }
-    println("Приложенные документы (аккаунт $id): ${files.size}")
+    println("Приложенные документы $scope: ${files.size}")
     files.forEach { f -> println("- ${f.name} (${humanSize(f.length())})") }
 }
 

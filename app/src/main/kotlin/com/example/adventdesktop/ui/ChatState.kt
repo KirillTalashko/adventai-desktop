@@ -127,6 +127,9 @@ data class RagComparisonView(val docCount: Int, val fixed: RagStrategyView, val 
 private const val HELP_COMMAND = "/help"
 private const val DEV_DOCS_PREVIEW = 25
 
+/** Шапка сообщения навыка docs; вынесена, чтобы отсечь её дубль, скопированный моделью из истории. */
+private const val DOCS_SKILL_HEADER = "🧰 Навык docs (Skill + CLI)"
+
 /** Префикс [OllamaEmbedder.id] — по нему восстанавливаем эмбеддер, которым построен индекс доков. */
 private const val OLLAMA_EMBEDDER_PREFIX = "ollama:"
 
@@ -665,7 +668,7 @@ class ChatState(
         val ctx = conv.task ?: return
         val ds = docStore ?: return
         if (loading) return
-        val saved = ds.save(file) ?: run { error = "Не удалось сохранить файл"; return }
+        val saved = ds.save(conv.id, file) ?: run { error = "Не удалось сохранить файл"; return }
         val label = if (ctx.awaiting == Awaiting.DOCUMENT && ctx.prompt.isNotBlank()) ctx.prompt else saved
         val entry = "$label → $saved"
         val docText = PdfText.extract(file)   // content-aware: пайплайн увидит содержимое (сверка ФИО/дат), а не только метку
@@ -684,6 +687,10 @@ class ChatState(
      * День 20 — наглядность навыка: после приложения документа навык **docs** (Skill + CLI), если включён,
      * САМ зовёт `visa-cli docs` и комментирует — что уже приложено и чего ещё не хватает по визе. Так видно,
      * что скилл реагирует на загрузку файла (а не просто молчит).
+     *
+     * Навыку отдаём то же `[STATE]`, что и стадиям пайплайна: иначе в диалоге ДВА источника правды — досье
+     * кейса и вывод CLI — и они расходятся. Плюс явные правила доказательства: без них модель брала ФИО из
+     * ИМЁН ФАЙЛОВ («4 человека вместо 3») и повторяла собственные прошлые выводы, увидев их в истории.
      */
     private fun commentOnDocsViaSkill(justAdded: String) {
         if (!config.skillDocsEnabled) return
@@ -691,14 +698,28 @@ class ChatState(
         val repo = conversations ?: return
         scope.launch {
             val conv = current ?: return@launch
-            val goal = "Пользователь только что приложил документ «$justAdded». Вызови `visa-cli docs check` " +
-                "(он покажет содержимое каждого файла). Сверь: на ОДНО ли лицо оформлены документы (одинаковые ФИО) " +
-                "и бьются ли даты с поездкой. Кратко скажи, что приложено и чего не хватает по визе; и ВАЖНО — " +
-                "если документы похоже на РАЗНЫХ людей или данные противоречат, ЯВНО предупреди (⚠️) и не принимай " +
-                "пакет как валидный. Не выдумывай — опирайся на извлечённый текст; если текст не извлёкся (скан), скажи это."
+            val state = conv.task?.renderStateBlock().orEmpty()
+            val goal = buildString {
+                if (state.isNotBlank()) append(state).append("\n\n")
+                append("Пользователь только что приложил документ «").append(justAdded).append("». ")
+                append("Вызови `visa-cli docs check` — он вернёт содержимое документов ТОЛЬКО этого дела ")
+                append("(файлы прошлых поездок в выдачу не попадают). Сверь их с досье выше: владелец (ФИО), ")
+                append("страна и даты.\n")
+                append("Правила доказательства (нарушать нельзя):\n")
+                append("1. Имя файла — НЕ доказательство. ФИО, страну и даты бери ТОЛЬКО из извлечённого ")
+                append("текста и приводи короткую цитату из него.\n")
+                append("2. Текст не извлёкся (скан) → статус «не проверено»: никаких выводов ни о владельце, ")
+                append("ни о годности такого файла.\n")
+                append("3. Не пересказывай свои прошлые сообщения — сверяй заново по [CLI_RESULT].\n")
+                append("4. Не считай людей по числу файлов: один человек прикладывает несколько документов.\n")
+                append("Кратко: что приложено, что сошлось с досье, что нет и чего не хватает по визе. ")
+                append("Противоречие, подтверждённое ЦИТАТОЙ, — предупреди ⚠️ и не принимай пакет как валидный.")
+            }
             val run = runCatchingCancellable { engine.run(SkillDocs.load("visa-cli"), conv.messages, goal) }.getOrNull() ?: return@launch
             val trace = run.calls.joinToString("\n") { "🔧 ${it.command}" }
-            val text = "🧰 Навык docs (Skill + CLI)\n" + (if (trace.isNotBlank()) "$trace\n\n" else "") + run.reply
+            // Шапку модель копирует из прошлых сообщений истории — режем дубль, свою добавляем сами.
+            val body = run.reply.lineSequence().filterNot { it.trim() == DOCS_SKILL_HEADER }.joinToString("\n").trim()
+            val text = "$DOCS_SKILL_HEADER\n" + (if (trace.isNotBlank()) "$trace\n\n" else "") + body
             val base = current ?: return@launch
             val withMsg = base.withMessage(Message(Role.Assistant, text, usage = run.usage))
             if (current?.id == withMsg.id) current = withMsg
@@ -714,7 +735,7 @@ class ChatState(
         val ctx = conv.task ?: return
         val ds = docStore ?: return
         if (loading) return
-        val saved = ds.save(file) ?: run { error = "Не удалось сохранить файл"; return }
+        val saved = ds.save(conv.id, file) ?: run { error = "Не удалось сохранить файл"; return }
         val entry = "$label → $saved"
         val docText = PdfText.extract(file)
         val updated = conv.withMessage(Message(Role.User, "Приложен документ: $saved ($label)"))
@@ -1577,7 +1598,8 @@ class ChatState(
         } }
         interviewAgent = client?.let { MockInterviewAgent(it) }
         // День 20: навык (Skill + CLI). CLI читает активный аккаунт сам (accounts.json), поэтому id не пробрасываем.
-        val runner = CliSkillRunner(accountId = null)
+        // Диалог, наоборот, пробрасываем: без `--conv` навык поднял бы документы ВСЕХ прошлых дел аккаунта.
+        val runner = CliSkillRunner(accountId = null, conversationId = { current?.id })
         skillRunner = runner
         skillEngine = client?.let { SkillEngine(it, runner) }
         promptAnalyzer = extractorClient?.let { PromptTuneAnalyzer(it) }
