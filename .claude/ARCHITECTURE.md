@@ -1,7 +1,8 @@
 # Архитектура — AdventAI Desktop
-
-Clean Architecture в одном Gradle-модуле, три пакета + composition root. Доменный слой не зависит ни
-от чего (pure Kotlin), data реализует его порты, ui рисует Compose, `Main.kt` всё связывает вручную.
+Clean Architecture в **шести Gradle-модулях** (День 32): `:core:domain` не зависит ни от чего
+(pure Kotlin + корутины), `:core:data` реализует его порты, `:app` рисует Compose и держит
+composition root, `:tools:{cli,mcp,service}` — отдельные деплоймые артефакты. Направление
+зависимостей теперь стережёт компилятор, а не договорённость.
 
 ## Карта файлов
 
@@ -45,9 +46,11 @@ Clean Architecture в одном Gradle-модуле, три пакета + comp
   парсер блока `[checklist]`.
 - **Dialogs.kt** — `SettingsDialog` (оба ключа + модель по умолчанию) и `MemoryDialog` (просмотр/правка 3 слоёв).
 
-### `Main.kt` — composition root
-`application { Window(icon=…) { App(state) } }`; `rememberAppState()` создаёт `FileStore`, репозитории,
-`ConfigStore`, `ChatState` вручную (KISS — без DI-фреймворка). Иконка окна — `src/main/resources/icon.png`.
+### `Main.kt` — composition root (`:app`)
+`startKoin { modules(appModules) }` до композиции, затем `application { Window(icon=…) { App(state) } }`;
+`rememberAppState(koin)` достаёт `ChatState` через `get { parametersOf(scope) }` и вешает `dispose()`
+на `DisposableEffect`. Сам граф — в `di/AppModule.kt` (Koin 4.1.1), см. CLAUDE.md о выборе версии.
+Иконка окна — `app/src/main/resources/icon.png`, иконка `.exe` — `app/icon.ico`.
 
 ## Поток данных (один ход)
 

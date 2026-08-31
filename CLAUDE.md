@@ -18,18 +18,40 @@ kotlinx-serialization · Okio нет (java.io) · jpackage (упаковка в 
 
 ## Архитектура (Clean Architecture · DRY · KISS)
 
+Проект разбит на **Gradle-модули** (День 32, шаг 2). Стрелки зависимостей идут строго вверх —
+нарушение теперь не проходит код-ревью, а не компилируется:
+
 ```
-domain/   Model · Memory (ContextAssembler + стратегии) · Ports (интерфейсы) · VisaAgent  — без зависимостей
-data/     LlmClient (Ktor) · FileConversationRepository · FileMemoryStore · ConfigStore · Models · Dto · Files
-ui/       Theme · ChatState (state-holder) · App · Dialogs  — Compose
-Main.kt   окно + composition root (ручной DI)
+:core:domain    Model · Memory (ContextAssembler + режимы) · Ports · VisaAgent · rag/
+                зависимости: ТОЛЬКО kotlinx-coroutines-core
+:core:data      LlmClient (Ktor) · FileConversationRepository · FileMemoryStore · ConfigStore ·
+                Models · Dto · Files · KnowledgeIndex · McpClient  + resources/{knowledge,skills,rag_eval}
+                -> :core:domain
+:app            Theme · ChatState (state-holder) · App · Dialogs · di/AppModule · Main.kt
+                -> :core:data   (Compose + Koin; composition root)
+:tools:cli      консольные харнессы (runAgentProbe, runTaskFlowCheck, …) + fat-jar visa-cli
+:tools:mcp      MCP-серверы (визовый + dev) + fat-jar для VPS
+:tools:service  приватный HTTP LLM-сервис + fat-jar
 ```
-Правило границ: **UI знает только про `ChatState`; домен не знает про HTTP/файлы/Compose.** Подробности — `.claude/ARCHITECTURE.md`.
+Правило границ: **UI знает только про `ChatState`; домен не знает про HTTP/файлы/Compose.**
+
+Одна связь не видна компилятору: `McpClient` поднимает MCP-сервер подпроцессом
+(`java -cp <java.class.path> …mcp.VisaMcpServerKt`), поэтому `:app` и `:tools:cli` держат
+`runtimeOnly(project(":tools:mcp"))` — на компиляционном classpath его нет и быть не должно.
+
+DI — **Koin 4.1.1**, граф в `app/…/di/AppModule.kt` (`dataModule` / `gatewayModule` / `stateModule`).
+Версия не последняя намеренно: 4.2.x собран на Kotlin 2.3.20, компилятор проекта 2.1.21 таких
+метаданных не читает. `koin-compose` не подключён (тянет Compose 1.8.2 против 1.7.3).
+Полнота графа проверяется тестом `app/src/test/…/AppModuleTest.kt` на каждой сборке.
+
+Подробности — `.claude/ARCHITECTURE.md`.
 
 ## Память и контекст
 
-Три слоя памяти (краткосрочная / рабочая / долговременная) + 5 стратегий контекста
-(3 слоя · окно · факты · резюме · полная). Подробности и где в коде — `.claude/MEMORY_MODEL.md` и `.claude/CONTEXT_WINDOW.md`.
+Три слоя памяти (краткосрочная / рабочая / долговременная) + 5 режимов контекста, переключаемых
+чипом «Память» в композере (`domain/Memory.kt → MemoryMode`): авто · только последние · ключевые факты ·
+краткий пересказ · вся история. Режим меняет объём истории и блоки памяти диалога, но НЕ трогает
+инварианты и профиль. Подробности — `.claude/MEMORY_MODEL.md` и `.claude/CONTEXT_WINDOW.md`.
 
 ## Данные на диске (`~/.adventai/`)
 
@@ -55,7 +77,9 @@ Main.kt   окно + composition root (ручной DI)
 
 - Не тащить HTTP/Ktor/файлы в `ui` — только через доменные порты (`LlmGateway`, репозитории).
 - Кликабельные элементы — `Surface(onClick=…)` (ripple обрезается по скруглению), не `Modifier.clickable` на Surface.
-- Дизайн: сине-белый, один акцент `#2F6BED`, тёмный primary, скругления; стиль Claude Code (см. `DESIGN_BRIEF.md`).
+- Дизайн: «бумага + терракота» — тёплый кремовый холст `#FAF9F5`, один акцент терракота `#C96442`
+  (в тёмной `#D97757`), тёмный primary, засечки в заголовках, границы вместо теней (см. `REDESIGN_CLAUDE_DESIGN.md`).
+  Цвета — только через `MaterialTheme.colorScheme` / `AppColors` / `StatusColors`; hex в композаблах не хардкодить.
 - Ключи и секреты — в `~/.adventai/config.json` или переменных окружения, **не** в репозитории.
 - JVM-target Kotlin = Java (21); публичный класс не должен светить `internal`-тип в конструкторе.
 
@@ -69,4 +93,6 @@ Main.kt   окно + composition root (ручной DI)
 - `PROMPTING.md` — промпт-инжиниринг, системный промпт, формат `[checklist]`.
 - `STATE_MACHINE.md` — состояние задачи и инварианты (роадмап).
 - `ANTIPATTERNS.md` — чего не делать.
-- `DESIGN_BRIEF.md` (в корне) — мета-промпт по дизайну в стиле Claude Code.
+- `REDESIGN_CLAUDE_DESIGN.md` (в корне) — **действующий** бриф визуального слоя: «бумага + терракота» (claude.ai).
+- `DESIGN_BRIEF.md` (в корне) — прежний бриф в стиле Claude Code; по визуальному слою заменён на редизайн выше,
+  раскладка/принципы взаимодействия оттуда остаются в силе.
