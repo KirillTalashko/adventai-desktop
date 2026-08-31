@@ -48,6 +48,17 @@ import kotlinx.coroutines.delay
 import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.StartOffset
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 
 /**
  * Статус-строка задачи (День 13) — как у Claude Code: эмблема · этап (думает/планирует/исполняет/
@@ -70,15 +81,173 @@ fun TaskStatusLine(state: ChatState) {
     }
     val seconds = if (state.loading && state.opStartedAtMs > 0) ((now - state.opStartedAtMs) / 1000).coerceAtLeast(0)
     else state.lastOpSeconds
-    Row(
-        Modifier.padding(start = 4.dp, top = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    Column(Modifier.fillMaxWidth()) {
+        // §5.6: строка задачи отделена сверху ПУНКТИРНОЙ линией — она принадлежит композеру, а не ленте.
+        val outline = MaterialTheme.colorScheme.outline
+        Canvas(Modifier.fillMaxWidth().height(1.dp)) {
+            drawLine(
+                color = outline,
+                start = Offset(0f, 0f),
+                end = Offset(size.width, 0f),
+                strokeWidth = size.height,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx()))
+            )
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(start = 4.dp, top = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            PassportEmblem(loading = state.loading, modifier = Modifier.size(16.dp), reducedMotion = state.config.reducedMotion)
+            Text(verb, style = MaterialTheme.typography.bodySmall, color = AppColors.muted)
+            if (seconds > 0) Text("· ${fmtElapsed(seconds)}", style = MaterialTheme.typography.bodySmall, color = AppColors.muted)
+            if (state.lastPromptTokens > 0) Text("· ${state.lastPromptTokens} ток.", style = MaterialTheme.typography.bodySmall, color = AppColors.muted)
+        }
+    }
+}
+
+
+/** Статусы плашки загрузки (§5.5) — сменяются по кругу, пока идёт ответ. */
+private val LOADER_STATUSES = listOf("Проверяю документы…", "Сверяю требования…", "Готовлю чек-лист…")
+
+/** Как часто меняется статус (§5.5). */
+private const val LOADER_STATUS_MS = 950L
+
+/** Длительность цикла перелистывания и сдвиг фазы между страницами (§5.5). */
+private const val FLIP_MS = 2100
+private const val FLIP_PHASE_MS = 350
+private const val FLIP_PAGES = 6
+
+/**
+ * Индикатор ожидания ответа (§5.5): плашка с «листающимся» паспортом и сменой статуса.
+ * Заменяет три точки — паспорт здесь несёт смысл продукта, а не украшает.
+ *
+ * При «Меньше анимаций» паспорт статичен и статус не меняется: настройка обязана гасить и цикл
+ * перелистывания, и подмену текста, иначе она выключает только часть движения.
+ */
+@Composable
+fun PassportLoader(reducedMotion: Boolean) {
+    var statusIndex by remember { mutableStateOf(0) }
+    LaunchedEffect(reducedMotion) {
+        if (reducedMotion) return@LaunchedEffect
+        while (true) {
+            delay(LOADER_STATUS_MS)
+            statusIndex = (statusIndex + 1) % LOADER_STATUSES.size
+        }
+    }
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(Radii.lg),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
     ) {
-        PassportEmblem(loading = state.loading, modifier = Modifier.size(16.dp))
-        Text(verb, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (seconds > 0) Text("· ${fmtElapsed(seconds)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (state.lastPromptTokens > 0) Text("· ${state.lastPromptTokens} ток.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(
+            Modifier.padding(start = 15.dp, end = 20.dp, top = 13.dp, bottom = 13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            FlippingPassport(reducedMotion)
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    LOADER_STATUSES[statusIndex],
+                    style = MaterialTheme.typography.titleMedium.copy(fontSize = 15.5.sp),
+                    color = AppColors.ink
+                )
+                Text(
+                    "Визовый специалист изучает пакет",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppColors.muted
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Паспорт 62 × 46 с перелистыванием (§5.5): обложка + блок страниц, поверх — шесть страниц,
+ * каждая вращается вокруг ЛЕВОГО края (корешка) со сдвигом фазы. Обратная сторона страницы не
+ * показывается (аналог `backface-visibility: hidden`) — иначе на второй половине оборота видно
+ * «изнанку» и лист выглядит вывернутым.
+ */
+@Composable
+private fun FlippingPassport(reducedMotion: Boolean) {
+    val transition = rememberInfiniteTransition(label = "passport")
+    val sway by if (reducedMotion) remember { mutableStateOf(0f) } else transition.animateFloat(
+        initialValue = -2f,
+        targetValue = 2f,
+        animationSpec = infiniteRepeatable(tween(FLIP_MS, easing = LinearEasing), RepeatMode.Reverse),
+        label = "sway"
+    )
+    Box(Modifier.size(width = 62.dp, height = 46.dp).graphicsLayer { translationY = sway }) {
+        Row(Modifier.align(Alignment.Center)) {
+            // Обложка: скругления «5 3 3 5» — со стороны корешка радиус меньше.
+            Box(
+                Modifier.size(width = 31.dp, height = 43.dp)
+                    .background(
+                        AppColors.accent,
+                        RoundedCornerShape(topStart = 5.dp, topEnd = 3.dp, bottomEnd = 3.dp, bottomStart = 5.dp)
+                    )
+            ) {
+                Canvas(Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+                    // Глобус — контурный круг 11.
+                    drawCircle(
+                        Color.White.copy(alpha = 0.92f),
+                        radius = 5.5.dp.toPx(),
+                        center = Offset(w / 2f, h * 0.40f),
+                        style = Stroke(width = 1.1.dp.toPx())
+                    )
+                    // Полоска-надпись под ним.
+                    drawLine(
+                        Color.White.copy(alpha = 0.75f),
+                        start = Offset(w / 2f - 7.5.dp.toPx(), h * 0.72f),
+                        end = Offset(w / 2f + 7.5.dp.toPx(), h * 0.72f),
+                        strokeWidth = 1.6.dp.toPx()
+                    )
+                    // Внутренняя тень у корешка — справа.
+                    drawRect(
+                        Color.Black.copy(alpha = 0.14f),
+                        topLeft = Offset(w - 3.dp.toPx(), 0f),
+                        size = Size(3.dp.toPx(), h)
+                    )
+                }
+            }
+            // Блок страниц: без левой границы — он «вложен» в обложку.
+            Box(
+                Modifier.padding(top = 2.dp).size(width = 28.dp, height = 39.dp)
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(topEnd = 3.dp, bottomEnd = 3.dp))
+                    .border(
+                        1.dp, MaterialTheme.colorScheme.outlineVariant,
+                        RoundedCornerShape(topEnd = 3.dp, bottomEnd = 3.dp)
+                    )
+            ) {
+                if (!reducedMotion) {
+                    repeat(FLIP_PAGES) { i ->
+                        val angle by transition.animateFloat(
+                            initialValue = 0f,
+                            targetValue = -180f,
+                            animationSpec = infiniteRepeatable(
+                                tween(FLIP_MS, easing = CubicBezierEasing(0.55f, 0.06f, 0.4f, 1f)),
+                                initialStartOffset = StartOffset(i * FLIP_PHASE_MS)
+                            ),
+                            label = "page$i"
+                        )
+                        Box(
+                            Modifier.fillMaxSize()
+                                .graphicsLayer {
+                                    transformOrigin = TransformOrigin(0f, 0.5f)
+                                    rotationY = angle
+                                    cameraDistance = 12f * density
+                                    // Аналог backface-visibility: после 90° лист скрываем.
+                                    alpha = if (angle < -90f) 0f else 1f
+                                }
+                                .background(MaterialTheme.colorScheme.surface)
+                                .border(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -154,7 +323,7 @@ private fun ContinueInline(state: ChatState, ctx: TaskContext) {
             Text(
                 "📎 Позже приложите (кнопкой «+»): ${ctx.pending.joinToString(", ")}",
                 style = MaterialTheme.typography.labelSmall,
-                color = AppColors.accentText
+                color = AppColors.accent
             )
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -251,17 +420,24 @@ private fun OptionRow(label: String, onClick: () -> Unit) {
 
 @Composable
 private fun SmallPrimary(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
     Surface(
         onClick = onClick,
         enabled = enabled,
-        shape = CircleShape,
-        color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+        interactionSource = interaction,
+        shape = RoundedCornerShape(Radii.pill),
+        color = when {
+            !enabled -> MaterialTheme.colorScheme.outlineVariant
+            hovered -> AppColors.accentHover
+            else -> AppColors.accent
+        }
     ) {
         Text(
             label,
-            Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            color = if (enabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.labelLarge
+            Modifier.padding(horizontal = 15.dp, vertical = 7.dp),
+            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+            color = MaterialTheme.colorScheme.onSecondary
         )
     }
 }
@@ -280,10 +456,12 @@ private fun SmallGhost(label: String, onClick: () -> Unit) {
 
 /** Эмблема-паспорт: закрытый в покое, «листается» (переворот страницы у корешка) во время загрузки. */
 @Composable
-private fun PassportEmblem(loading: Boolean, modifier: Modifier = Modifier) {
+private fun PassportEmblem(loading: Boolean, modifier: Modifier = Modifier, reducedMotion: Boolean = false) {
     val cover = AppColors.accent
     val pageLight = MaterialTheme.colorScheme.surfaceVariant   // страницы — бумага темы, не холодный голубой
-    val angle by rememberInfiniteTransition(label = "passport").animateFloat(
+    // «Меньше анимаций» обязано гасить и этот цикл, иначе настройка выключает движение лишь частично.
+    val angle by if (reducedMotion) remember { mutableStateOf(0f) }
+    else rememberInfiniteTransition(label = "passport").animateFloat(
         initialValue = 0f,
         targetValue = Math.PI.toFloat(),
         animationSpec = infiniteRepeatable(animation = tween(700, easing = LinearEasing), repeatMode = RepeatMode.Restart),

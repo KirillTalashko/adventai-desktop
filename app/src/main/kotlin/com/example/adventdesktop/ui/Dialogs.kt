@@ -2,6 +2,7 @@ package com.example.adventdesktop.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -50,8 +51,98 @@ import com.example.adventdesktop.data.ModelOption
 import com.example.adventdesktop.data.Models
 import com.example.adventdesktop.domain.Invariant
 import com.example.adventdesktop.domain.Role
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.material3.HorizontalDivider
 
 // ============================== Настройки ==============================
+
+
+/**
+ * Единый каркас модального окна (§5.8): скрим (клик — закрыть), карточка `surface` R22,
+ * серифный заголовок + круглая кнопка-крестик, скроллируемое тело.
+ *
+ * Это ВНУТРИОКОННЫЙ модал, а не отдельное окно ОС: по прототипу диалог затемняет приложение и
+ * закрывается кликом по скриму — отдельное окно так себя не ведёт.
+ */
+@Composable
+fun ModalScaffold(title: String, onClose: () -> Unit, body: @Composable ColumnScope.() -> Unit) {
+    BoxWithConstraints(
+        Modifier.fillMaxSize()
+            .background(MaterialTheme.colorScheme.scrim)
+            // Клик по скриму закрывает; indication = null, чтобы фон не подсвечивался как кнопка.
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClose),
+        contentAlignment = Alignment.Center
+    ) {
+        val maxCardHeight = maxHeight * Layout.dialogMaxHeightFraction
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(Radii.dialog),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            shadowElevation = Elevations.dialog,
+            modifier = Modifier.widthIn(max = Sizes.dialogMaxWidth).heightIn(max = maxCardHeight)
+                // Клик по самой карточке не должен «протекать» в скрим и закрывать окно.
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
+        ) {
+            Column(
+                Modifier.padding(vertical = Layout.dialogPaddingV, horizontal = Layout.dialogPaddingH)
+            ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, color = AppColors.ink)
+                    Surface(
+                        onClick = onClose,
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.size(30.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(Icons.Outlined.Close, "закрыть", Modifier.size(16.dp), tint = AppColors.muted)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(Space.md))
+                Column(
+                    Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(Space.md),
+                    content = body
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Блок внутри модального окна (§5.8): подложка `bg` на белой карточке, слабая граница, R16.
+ * Заголовок и подпись разделены «·», как в прототипе.
+ */
+@Composable
+private fun ModalBlock(title: String, subtitle: String, content: @Composable ColumnScope.() -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.background,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, color = AppColors.ink)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = AppColors.muted)
+            Spacer(Modifier.height(Space.xs))
+            content()
+        }
+    }
+}
 
 @Composable
 fun SettingsDialog(state: ChatState, onClose: () -> Unit) {
@@ -63,72 +154,125 @@ fun SettingsDialog(state: ChatState, onClose: () -> Unit) {
     var reducedMotion by remember { mutableStateOf(state.config.reducedMotion) }
     var proxy by remember { mutableStateOf(state.config.httpProxy) }
 
-    AlertDialog(
-        // Единый шаблон окна (§5): бумага, xl-скругление, плоскость (tonalElevation = 0).
-        shape = RoundedCornerShape(Radii.xl),
-        containerColor = MaterialTheme.colorScheme.surface,
-        tonalElevation = 0.dp,
-        onDismissRequest = onClose,
-        title = { Text("Настройки") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    "Ключи хранятся локально в ~/.adventai/config.json (или берутся из переменных окружения).",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                OutlinedTextField(
-                    value = orKey, onValueChange = { orKey = it },
-                    label = { Text("OpenRouter API-ключ") }, singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = dsKey, onValueChange = { dsKey = it },
-                    label = { Text("DeepSeek API-ключ") }, singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth()
-                )
-                Text("Модель по умолчанию", style = MaterialTheme.typography.labelLarge)
-                ModelSelector(model) { model = it }
-                OutlinedTextField(
-                    value = proxy, onValueChange = { proxy = it },
-                    label = { Text("HTTP-прокси (необязательно)") },
-                    placeholder = { Text("http://127.0.0.1:10809") },
-                    singleLine = true, modifier = Modifier.fillMaxWidth()
-                )
-                Text(
-                    "Для сетей с локальным туннелем, где прямой выход/DNS закрыты. Пусто — прямое соединение.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                SettingToggle("Тёмная тема", "Тёмное оформление приложения.", darkTheme) { darkTheme = it }
-                SettingToggle("Меньше анимаций", "Мгновенная прокрутка без плавных переходов.", reducedMotion) { reducedMotion = it }
-                SettingToggle("Режим разработчика", "Показывать инженерные витрины: инструменты MCP, коннекторы, демо-пайплайн.", devMode) { devMode = it }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                state.saveConfig(
-                    state.config.copy(
-                        openrouterKey = orKey.trim(), deepseekKey = dsKey.trim(), modelId = model.id,
-                        developerMode = devMode, darkTheme = darkTheme, reducedMotion = reducedMotion,
-                        httpProxy = proxy.trim(),
+    ModalScaffold("Настройки", onClose) {
+        Text(
+            "Ключи хранятся локально в ~/.adventai/config.json (или берутся из переменных окружения).",
+            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Normal), color = AppColors.muted
+        )
+        FieldLabel("OpenRouter API-ключ")
+        ModalField(orKey, { orKey = it }, password = true)
+        FieldLabel("DeepSeek API-ключ")
+        ModalField(dsKey, { dsKey = it }, password = true)
+        FieldLabel("Модель по умолчанию")
+        ModelSelector(model) { model = it }
+        FieldLabel("HTTP-прокси (необязательно)")
+        ModalField(proxy, { proxy = it }, placeholder = "http://127.0.0.1:10809")
+        Text(
+            "Для сетей с локальным туннелем, где прямой выход/DNS закрыты. Пусто — прямое соединение.",
+            style = MaterialTheme.typography.bodySmall, color = AppColors.muted
+        )
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        SettingToggle("Тёмная тема", "Тёмное оформление приложения.", darkTheme) { darkTheme = it }
+        SettingToggle("Меньше анимаций", "Мгновенная прокрутка без плавных переходов.", reducedMotion) { reducedMotion = it }
+        SettingToggle("Режим разработчика", "Показывать инженерные витрины: инструменты MCP, коннекторы, RAG.", devMode) { devMode = it }
+        Row(
+            Modifier.fillMaxWidth().padding(top = Space.sm),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(onClick = onClose) { Text("Отмена", style = MaterialTheme.typography.labelLarge, color = AppColors.muted) }
+            Spacer(Modifier.width(Space.sm))
+            Surface(
+                onClick = {
+                    state.saveConfig(
+                        state.config.copy(
+                            openrouterKey = orKey.trim(), deepseekKey = dsKey.trim(), modelId = model.id,
+                            developerMode = devMode, darkTheme = darkTheme, reducedMotion = reducedMotion,
+                            httpProxy = proxy.trim(),
+                        )
                     )
+                    onClose()
+                },
+                shape = RoundedCornerShape(Radii.sm),
+                color = AppColors.accent
+            ) {
+                Text(
+                    "Сохранить",
+                    Modifier.padding(horizontal = 22.dp, vertical = 11.dp),
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold), color = MaterialTheme.colorScheme.onSecondary
                 )
-                onClose()
-            }) { Text("Сохранить") }
-        },
-        dismissButton = { TextButton(onClick = onClose) { Text("Отмена") } }
-    )
+            }
+        }
+    }
 }
 
-/** Строка-настройка «название + описание + ползунок» (аудит #10 — единый компактный вид для тумблеров). */
+/** Подпись над полем в модальном окне (§5.8). */
+@Composable
+private fun FieldLabel(text: String) {
+    Text(text, style = MaterialTheme.typography.labelLarge, color = AppColors.ink)
+}
+
+/** Поле ввода модального окна (§5.8): подложка `bg`, граница `outline`, R12, паддинг 11/13. */
+@Composable
+private fun ModalField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    password: Boolean = false,
+    placeholder: String = "",
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.background,
+        shape = RoundedCornerShape(Radii.sm),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Box(Modifier.padding(horizontal = 13.dp, vertical = 11.dp)) {
+            if (value.isEmpty() && placeholder.isNotEmpty()) {
+                Text(placeholder, style = MaterialTheme.typography.bodyMedium, color = AppColors.muted.copy(alpha = 0.85f))
+            }
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = AppColors.ink),
+                cursorBrush = SolidColor(AppColors.accent),
+                visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+/** Строка-настройка: название, пояснение и переключатель по §5.8 (трек 42×22, кнопка 18). */
 @Composable
 private fun SettingToggle(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.md)) {
         Column(Modifier.weight(1f)) {
-            Text(title, fontWeight = FontWeight.SemiBold)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(title, style = MaterialTheme.typography.labelLarge, color = AppColors.ink)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = AppColors.muted)
         }
-        Switch(checked = checked, onCheckedChange = onChange, colors = SwitchDefaults.colors(checkedTrackColor = AppColors.accent))
+        AppSwitch(checked, onChange)
+    }
+}
+
+/**
+ * Переключатель прототипа (§5.8): трек 42 × 22 меняет цвет `outline` → `accent`, белая кнопка 18
+ * едет на 20. Свой, а не Material: у M3 Switch другая геометрия и её не подогнать параметрами.
+ */
+@Composable
+private fun AppSwitch(checked: Boolean, onChange: (Boolean) -> Unit) {
+    val track by animateColorAsState(if (checked) AppColors.accent else MaterialTheme.colorScheme.outline, tween(300), label = "track")
+    val offset by animateDpAsState(if (checked) 20.dp else 2.dp, tween(300), label = "thumb")
+    Box(
+        Modifier.size(width = Sizes.switchTrackWidth, height = Sizes.switchTrackHeight)
+            .background(track, RoundedCornerShape(Radii.pill))
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onChange(!checked) },
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Box(
+            Modifier.padding(start = offset).size(Sizes.switchThumb)
+                .background(Color.White, CircleShape)
+        )
     }
 }
 
@@ -197,81 +341,58 @@ fun ProfileDialog(state: ChatState, onClose: () -> Unit) {
 
 @Composable
 fun MemoryDialog(state: ChatState, onClose: () -> Unit) {
-    DialogWindow(
-        onCloseRequest = onClose,
-        state = rememberDialogState(size = DpSize(700.dp, 660.dp)),
-        title = "Память"
-    ) {
-        AdventTheme(dark = state.config.darkTheme) {
-            Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                var refresh by remember { mutableStateOf(0) }
-                val longTerm = remember(refresh) { state.longTerm() }
-                val working = remember(refresh) { state.working() }
-                val profileItems = remember(longTerm) {
-                    longTerm.profile.lines().mapNotNull { line ->
-                        val t = line.trim()
-                        if (t.startsWith("-")) t.removePrefix("-").trim().takeIf { it.isNotEmpty() } else null
-                    }
-                }
+    var refresh by remember { mutableStateOf(0) }
+    val longTerm = remember(refresh) { state.longTerm() }
+    val working = remember(refresh) { state.working() }
+    val profileItems = remember(longTerm) {
+        longTerm.profile.lines().mapNotNull { line ->
+            val t = line.trim()
+            if (t.startsWith("-")) t.removePrefix("-").trim().takeIf { it.isNotEmpty() } else null
+        }
+    }
 
-                Column(
-                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    // Заголовок
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Память", style = MaterialTheme.typography.headlineSmall)
-                            Text(
-                                "Что агент помнит о вас и текущей задаче",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        TextButton(onClick = { refresh++ }) { Text("Обновить") }
-                    }
+    ModalScaffold("Память", onClose) {
+        Text(
+            "Что агент помнит о вас и текущей задаче. Память пополняется автоматически по ходу диалога; здесь можно дополнить вручную.",
+            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Normal), color = AppColors.muted
+        )
 
-                    // Долговременная
-                    MemoryCard("Долговременная память", "профиль и решения · сохраняется между сессиями") {
-                        SubLabel("Профиль")
-                        if (profileItems.isEmpty()) EmptyHint() else profileItems.forEach { Bullet(it) }
-                        AddRow("Добавить факт о пользователе…", "Добавить") { state.addProfileFact(it); refresh++ }
+        ModalBlock("Долговременная память", "профиль и решения · сохраняется между сессиями") {
+            SubLabel("Профиль")
+            if (profileItems.isEmpty()) EmptyHint() else profileItems.forEach { Bullet(it) }
+            AddRow("Добавить факт о пользователе…", "Добавить") { state.addProfileFact(it); refresh++ }
 
-                        Spacer(Modifier.size(2.dp))
-                        SubLabel("Решения")
-                        if (longTerm.decisions.isEmpty()) EmptyHint() else longTerm.decisions.forEach { Bullet(it) }
-                        AddRow("Добавить решение / договорённость…", "Добавить") { state.addDecision(it); refresh++ }
-                    }
+            Spacer(Modifier.height(Space.xs))
+            SubLabel("Решения")
+            if (longTerm.decisions.isEmpty()) EmptyHint() else longTerm.decisions.forEach { Bullet(it) }
+            AddRow("Добавить решение / договорённость…", "Добавить") { state.addDecision(it); refresh++ }
+        }
 
-                    // Рабочая
-                    MemoryCard("Рабочая память", "цель и ограничения · текущий диалог") {
-                        SubLabel("Цель")
-                        Text(
-                            working.goal.ifBlank { "—" },
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (working.goal.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
-                        )
-                        AddRow("Задать / изменить цель задачи…", "Задать") { state.setGoal(it); refresh++ }
+        ModalBlock("Рабочая память", "цель и ограничения · текущий диалог") {
+            SubLabel("Цель")
+            Text(
+                working.goal.ifBlank { "—" },
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (working.goal.isBlank()) AppColors.muted else AppColors.ink
+            )
+            AddRow("Задать / изменить цель задачи…", "Задать") { state.setGoal(it); refresh++ }
 
-                        Spacer(Modifier.size(2.dp))
-                        SubLabel("Ограничения")
-                        if (working.constraints.isEmpty()) EmptyHint() else working.constraints.forEach { Bullet(it) }
-                        AddRow("Добавить ограничение…", "Добавить") { state.addConstraint(it); refresh++ }
-                    }
+            Spacer(Modifier.height(Space.xs))
+            SubLabel("Ограничения")
+            if (working.constraints.isEmpty()) EmptyHint() else working.constraints.forEach { Bullet(it) }
+            AddRow("Добавить ограничение…", "Добавить") { state.addConstraint(it); refresh++ }
+        }
 
-                    // Низ
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = { state.clearWorking(); refresh++ }) { Text("Очистить рабочую") }
-                        TextButton(onClick = { state.clearLongTerm(); refresh++ }) { Text("Очистить долговременную") }
-                        Spacer(Modifier.weight(1f))
-                        Button(onClick = onClose, shape = CircleShape) { Text("Готово") }
-                    }
-                    Text(
-                        "Память пополняется автоматически по ходу диалога; здесь можно дополнить вручную.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { state.clearWorking(); refresh++ }) {
+                Text("Очистить рабочую", style = MaterialTheme.typography.bodySmall, color = AppColors.muted)
+            }
+            TextButton(onClick = { state.clearLongTerm(); refresh++ }) {
+                Text("Очистить долговременную", style = MaterialTheme.typography.bodySmall, color = AppColors.muted)
+            }
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = { refresh++ }) {
+                Text("Обновить", style = MaterialTheme.typography.bodySmall, color = AppColors.accent)
             }
         }
     }
@@ -281,45 +402,26 @@ fun MemoryDialog(state: ChatState, onClose: () -> Unit) {
 
 @Composable
 fun InvariantsDialog(state: ChatState, onClose: () -> Unit) {
-    DialogWindow(
-        onCloseRequest = onClose,
-        state = rememberDialogState(size = DpSize(700.dp, 640.dp)),
-        title = "Правила"
-    ) {
-        AdventTheme(dark = state.config.darkTheme) {
-            Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                val all = state.invariants
-                val builtIns = all.filter { it.builtIn }
-                val userInv = all.filterNot { it.builtIn }
+    val all = state.invariants
+    val builtIns = all.filter { it.builtIn }
+    val userInv = all.filterNot { it.builtIn }
 
-                Column(
-                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Text("Правила", style = MaterialTheme.typography.headlineSmall)
-                    Text(
-                        "Правила, которые ассистент не имеет права нарушать. Хранятся отдельно от диалога, учитываются в каждом ответе; при конфликте ассистент отказывается и объясняет причину.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+    ModalScaffold("Правила", onClose) {
+        Text(
+            "Правила, которые ассистент не имеет права нарушать. Учитываются в каждом ответе; при конфликте ассистент отказывается и объясняет причину.",
+            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Normal), color = AppColors.muted
+        )
 
-                    MemoryCard("Встроенные правила", "жёсткие · всегда активны") {
-                        builtIns.forEach { Bullet(it.text) }
-                    }
+        // §5.8: у встроенных правил маркеры акцентом — они жёсткие и всегда активны.
+        ModalBlock("Встроенные правила", "жёсткие · всегда активны") {
+            builtIns.forEach { Bullet(it.text, marker = AppColors.accent) }
+        }
 
-                    MemoryCard("Ваши правила", "бизнес-правила, ограничения по бюджету/стеку, договорённости") {
-                        if (userInv.isEmpty()) EmptyHint() else userInv.forEach { inv ->
-                            InvariantRow(inv, onToggle = { state.toggleInvariant(inv.id) }, onRemove = { state.removeInvariant(inv.id) })
-                        }
-                        AddRow("Добавить правило…", "Добавить") { state.addInvariant(it) }
-                    }
-
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Spacer(Modifier.weight(1f))
-                        Button(onClick = onClose, shape = CircleShape) { Text("Готово") }
-                    }
-                }
+        ModalBlock("Ваши правила", "бизнес-правила, ограничения, договорённости") {
+            if (userInv.isEmpty()) EmptyHint() else userInv.forEach { inv ->
+                InvariantRow(inv, onToggle = { state.toggleInvariant(inv.id) }, onRemove = { state.removeInvariant(inv.id) })
             }
+            AddRow("Добавить правило…", "Добавить") { state.addInvariant(it) }
         }
     }
 }
@@ -427,14 +529,15 @@ private fun MemoryCard(title: String, subtitle: String, content: @Composable () 
 
 @Composable
 private fun SubLabel(text: String) {
-    Text(text, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = AppColors.accent)
+    Text(text, style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold), color = AppColors.accent)
 }
 
+/** Пункт списка (§5.8): маркер 5 px выровнен по ПЕРВОЙ строке текста, а не по центру абзаца. */
 @Composable
-private fun Bullet(text: String) {
-    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Box(Modifier.padding(top = 7.dp).size(5.dp).background(MaterialTheme.colorScheme.onSurfaceVariant, CircleShape))
-        Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+private fun Bullet(text: String, marker: Color? = null) {
+    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+        Box(Modifier.padding(top = 8.dp).size(5.dp).background(marker ?: AppColors.muted, CircleShape))
+        Text(text, style = MaterialTheme.typography.bodyMedium, color = AppColors.ink)
     }
 }
 

@@ -33,6 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import com.example.adventdesktop.domain.Account
 import com.example.adventdesktop.domain.UserProfile
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 /**
  * Онбординг / экран входа (Day 12). Без активного аккаунта, но с сохранёнными — показываем выбор
@@ -49,11 +50,12 @@ fun Onboarding(state: ChatState) {
             shape = RoundedCornerShape(Radii.xl),
             color = MaterialTheme.colorScheme.surface,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            modifier = Modifier.widthIn(max = 600.dp).fillMaxHeight(0.94f)
+            shadowElevation = Elevations.card,
+            modifier = Modifier.widthIn(max = Sizes.onboardingMaxWidth).fillMaxHeight(0.94f)
         ) {
             Column(
-                Modifier.padding(28.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                Modifier.padding(32.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(15.dp)
             ) {
                 if (creating) {
                     CreateProfile(
@@ -74,14 +76,21 @@ fun Onboarding(state: ChatState) {
 
 @Composable
 private fun CreateProfile(state: ChatState, onCancel: (() -> Unit)?) {
+    // §5.9: ЕДИНСТВЕННОЕ место в интерфейсе, где показывается название продукта.
+    Text(
+        "AdventAI · Визовый специалист",
+        style = MaterialTheme.typography.labelMedium,
+        color = AppColors.accent
+    )
     Text(
         if (state.accountList.isEmpty()) "Добро пожаловать" else "Новый аккаунт",
-        style = MaterialTheme.typography.headlineSmall
+        style = MaterialTheme.typography.displaySmall,
+        color = AppColors.ink
     )
     Text(
         "Создайте профиль — визовый специалист подстроится под ваш стиль, формат ответов и ограничения. Профиль можно изменить в любой момент.",
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
+        style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.4.sp),
+        color = AppColors.muted
     )
     ProfileForm(
         initial = UserProfile(),
@@ -93,7 +102,12 @@ private fun CreateProfile(state: ChatState, onCancel: (() -> Unit)?) {
 
 @Composable
 private fun ChooseAccount(state: ChatState, onCreateNew: () -> Unit) {
-    Text("С возвращением", style = MaterialTheme.typography.headlineSmall)
+    Text(
+        "AdventAI · Визовый специалист",
+        style = MaterialTheme.typography.labelMedium,
+        color = AppColors.accent
+    )
+    Text("С возвращением", style = MaterialTheme.typography.displaySmall, color = AppColors.ink)
     Text(
         "Выберите аккаунт, чтобы продолжить, или создайте новый.",
         style = MaterialTheme.typography.bodyMedium,

@@ -27,6 +27,11 @@ import com.example.adventdesktop.domain.FormatPref
 import com.example.adventdesktop.domain.ResponseLength
 import com.example.adventdesktop.domain.Tone
 import com.example.adventdesktop.domain.UserProfile
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
+import androidx.compose.ui.graphics.Color
 
 /**
  * Форма профиля предпочтений (Day 12) — общая для онбординга и редактирования.
@@ -69,11 +74,9 @@ fun ProfileForm(
         FieldLabel("Формат ответа")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             FormatPref.entries.forEach { pref ->
-                FilterChip(
-                    selected = pref in formats,
-                    onClick = { formats = if (pref in formats) formats - pref else formats + pref },
-                    label = { Text(pref.title) }
-                )
+                PrefChip(pref.title, pref in formats) {
+                    formats = if (pref in formats) formats - pref else formats + pref
+                }
             }
         }
 
@@ -106,14 +109,33 @@ fun ProfileForm(
 
 @Composable
 private fun FieldLabel(text: String) {
-    Text(text, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+    Text(text, style = MaterialTheme.typography.labelLarge, color = AppColors.ink)
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun <T> SingleChips(options: List<T>, selected: T, label: (T) -> String, onSelect: (T) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         options.forEach { option ->
-            FilterChip(selected = option == selected, onClick = { onSelect(option) }, label = { Text(label(option)) })
+            PrefChip(label(option), option == selected) { onSelect(option) }
         }
+    }
+}
+
+/** Чип-переключатель профиля (§5.9): пилюля; выбранный — заливка акцентом и белый текст. */
+@Composable
+private fun PrefChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(Radii.pill),
+        color = if (selected) AppColors.accent else MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, if (selected) AppColors.accent else MaterialTheme.colorScheme.outline)
+    ) {
+        Text(
+            label,
+            Modifier.padding(horizontal = 16.dp, vertical = 9.dp),
+            style = MaterialTheme.typography.labelLarge,
+            color = if (selected) MaterialTheme.colorScheme.onSecondary else AppColors.ink
+        )
     }
 }

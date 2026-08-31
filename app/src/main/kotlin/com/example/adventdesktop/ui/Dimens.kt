@@ -3,33 +3,49 @@ package com.example.adventdesktop.ui
 import androidx.compose.ui.unit.dp
 
 /**
- * Единый источник токенов радиусов (аудит Рамса, #3 aesthetic) — чтобы они не «дрейфовали» по коду.
- * Редизайн «бумага + терракота» (REDESIGN_CLAUDE_DESIGN.md §4) сместил шкалу к щедрым значениям:
- * самый скруглённый элемент интерфейса — композер (`xl`).
+ * Радиусы редизайна. Имена шкалы (xs…xl) сохранены — существующие вызовы Radii.sm / Radii.md
+ * компилируются как раньше и автоматически получают новые значения.
  */
 object Radii {
-    val xs = 8.dp   // мелкие пилюли/чипы/статусы
-    val sm = 12.dp  // кнопки, айтемы списка, дропдауны
-    val md = 14.dp  // карточки
-    val lg = 18.dp  // бабл сообщения, карточки памяти/RAG
-    val xl = 24.dp  // композер, онбординг, окна-диалоги
+    val xs = 8.dp    // мелкие чипы, строка токенов
+    val sm = 12.dp   // поля, кнопки, элемент диалога в сайдбаре, меню аккаунта
+    val md = 14.dp   // выпадающее меню модели
+    val lg = 18.dp   // карточки, пузырь сообщения, блоки памяти и правил
+    val xl = 24.dp   // композер, карточка онбординга
+
+    val icon = 10.dp     // иконочные кнопки сайдбара
+    val dialog = 22.dp   // модальные окна
+    val window = 16.dp   // окно приложения
+    val pill = 999.dp    // чипы-подсказки, чип статуса, переключатели
 }
 
-/**
- * Шкала отступов 4/8/12/16/24/32 (§4). Ленту сообщений держим в центрированной колонке
- * [Layout.readingWidth] с крупными полями — «воздух» страницы, а не плотный экран приложения.
- */
-object Space {
-    val xs = 4.dp
-    val sm = 8.dp
-    val md = 12.dp
-    val lg = 16.dp
-    val xl = 24.dp
-    val xxl = 32.dp
+/** Размеры каркаса — чтобы не «дрейфовали» по коду. */
+object Sizes {
+    val sidebarWidth = 272.dp
+    val winbarHeight = 42.dp
+    val chatContentMaxWidth = 740.dp
+    val composerMaxWidth = 760.dp
+    val dialogMaxWidth = 560.dp
+    val onboardingMaxWidth = 520.dp
+
+    val sendButton = 38.dp
+    val attachButton = 34.dp
+    val avatar = 26.dp
+    val emblem = 18.dp
+    val statusDot = 9.dp
+    val switchTrackWidth = 42.dp
+    val switchTrackHeight = 22.dp
+    val switchThumb = 18.dp
+
+    val messageGap = 22.dp
+    val activeIndicator = 3.dp
 }
 
-/** Размеры каркаса: ширина сайдбара и колонки чтения. */
-object Layout {
-    val sidebar = 272.dp
-    val readingWidth = 740.dp
+/** Elevation для Modifier.shadow — CSS-тени со смещением в Compose не воспроизводятся. */
+object Elevations {
+    val composer = 2.dp
+    val card = 8.dp
+    val menu = 8.dp
+    val dialog = 16.dp
+    val window = 24.dp
 }

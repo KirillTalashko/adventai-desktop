@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 
 package com.example.adventdesktop.ui
 
@@ -9,7 +9,9 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -85,6 +87,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -124,6 +129,17 @@ import com.example.adventdesktop.domain.rag.RetrievalTrace
 import com.example.adventdesktop.domain.rag.RewriteOutcome
 import com.example.adventdesktop.domain.rag.Scored
 import com.example.adventdesktop.domain.rag.ragLooksLikeRefusal
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.loadSvgPainter
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.ui.draw.drawBehind
 
 /**
  * Ховер поверхности (§4 «движение сдержанное»): плавная смена тона вместо теней и вспышек.
@@ -137,13 +153,13 @@ internal fun hoverColor(source: MutableInteractionSource, idle: Color, hover: Co
 }
 
 /**
- * Колонка чтения (§4): лента и композер живут в центрированной колонке ≤ [Layout.readingWidth]
+ * Колонка чтения (§4): лента и композер живут в центрированной колонке ≤ [Sizes.chatContentMaxWidth]
  * с крупными полями — так длинный ответ агента читается как страница, а не как таблица во всю ширину.
  */
 @Composable
 private fun ReadingColumn(content: @Composable () -> Unit) {
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-        Box(Modifier.widthIn(max = Layout.readingWidth).fillMaxWidth()) { content() }
+        Box(Modifier.widthIn(max = Sizes.chatContentMaxWidth).fillMaxWidth()) { content() }
     }
 }
 
@@ -155,13 +171,16 @@ fun App(state: ChatState) {
     var showInvariants by remember { mutableStateOf(false) }
 
     AdventTheme(dark = state.config.darkTheme) {
+        // §5.8: модальные окна — оверлей ВНУТРИ приложения (скрим затемняет его), а не окна ОС,
+        // поэтому весь экран и модалы живут в одном Box.
+        Box(Modifier.fillMaxSize()) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             if (state.needsOnboarding) {
                 Onboarding(state)
             } else {
                 Row(Modifier.fillMaxSize()) {
                     Sidebar(
-                        state, Modifier.width(Layout.sidebar).fillMaxHeight(),
+                        state, Modifier.width(Sizes.sidebarWidth).fillMaxHeight(),
                         onSettings = { showSettings = true },
                         onMemory = { showMemory = true },
                         onProfile = { showProfile = true },
@@ -181,6 +200,7 @@ fun App(state: ChatState) {
         if (state.connectorsOpen) ConnectorsDialog(state)
         if (state.rag.ragOpen) RagDialog(state)
         if (state.localLlm.localLlmOpen) LocalLlmDialog(state)
+        }
     }
 }
 
@@ -194,34 +214,21 @@ private fun Sidebar(
     onInvariants: () -> Unit
 ) {
     Column(
-        modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant).padding(Space.md),
-        verticalArrangement = Arrangement.spacedBy(Space.sm)
+        modifier = modifier.background(AppColors.sidebar)
+            .padding(vertical = Layout.sidebarPaddingV, horizontal = Layout.sidebarPaddingH),
+        verticalArrangement = Arrangement.spacedBy(Layout.sidebarBlockGap)
     ) {
-        // Бренд-марка: единственное место в сайдбаре, где акцент заливкой.
-        Row(
-            Modifier.padding(start = Space.xs, top = Space.xs, bottom = Space.xs),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Space.md)
-        ) {
-            Box(
-                Modifier.size(30.dp).background(AppColors.accent, RoundedCornerShape(Radii.xs)),
-                contentAlignment = Alignment.Center
-            ) { Text("В", color = MaterialTheme.colorScheme.onSecondary, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall) }
-            Column {
-                Text("AdventAI", style = MaterialTheme.typography.titleMedium)
-                Text("Визовый специалист", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-
+        // §5.1: название продукта в интерфейсе не дублируется — сайдбар начинается со свитчера аккаунта.
+        // Единственное место, где показывается имя продукта, — надзаголовок онбординга (§5.9).
         AccountSwitcher(state, onProfile)
 
-        // «Новая сессия» — заметная, но не кричащая: пилюля с волосяной границей, чернильный текст.
+        // «Новая сессия» — кнопка-контур: прозрачный фон, граница `outline`, на ховере заливка бумаги.
         val newInteraction = remember { MutableInteractionSource() }
         Surface(
             onClick = { state.newConversation() },
             interactionSource = newInteraction,
             color = hoverColor(newInteraction, Color.Transparent, MaterialTheme.colorScheme.surface),
-            shape = CircleShape,
+            shape = RoundedCornerShape(Radii.sm),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -230,21 +237,21 @@ private fun Sidebar(
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Outlined.Add, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurface)
+                Icon(Icons.Outlined.Add, null, Modifier.size(16.dp), tint = AppColors.ink)
                 Spacer(Modifier.width(Space.sm))
-                Text("Новая сессия", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.labelLarge)
+                Text("Новая сессия", color = AppColors.ink, style = MaterialTheme.typography.labelLarge)
             }
         }
 
         Text(
             "ДИАЛОГИ",
             style = MaterialTheme.typography.labelSmall,
-            letterSpacing = 0.8.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            letterSpacing = 0.4.sp,
+            color = AppColors.muted,
             modifier = Modifier.padding(start = Space.sm, top = Space.xs)
         )
 
-        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Layout.sidebarItemGap)) {
             items(state.conversationList, key = { it.id }) { meta ->
                 ConversationRow(
                     title = meta.title,
@@ -255,10 +262,12 @@ private fun Sidebar(
             }
         }
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-        SidebarButton("Правила", Icons.AutoMirrored.Outlined.Rule, onInvariants)
-        SidebarButton("Память", Icons.Outlined.Memory, onMemory)
-        SidebarButton("Настройки", Icons.Outlined.Settings, onSettings)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        SidebarButton("Правила", Icons.AutoMirrored.Outlined.Rule, onInvariants, Modifier.fillMaxWidth())
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+            SidebarButton("Память", Icons.Outlined.Memory, onMemory, Modifier.weight(1f))
+            SidebarButton("Настройки", Icons.Outlined.Settings, onSettings, Modifier.weight(1f))
+        }
     }
 }
 
@@ -270,39 +279,47 @@ private fun Sidebar(
 private fun ConversationRow(title: String, active: Boolean, onOpen: () -> Unit, onDelete: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    // Цвета читаются в composable-контексте: внутри drawBehind это уже DrawScope, не composition.
+    val accent = AppColors.accent
+    val indicator = Sizes.activeIndicator
     Surface(
         onClick = onOpen,
         interactionSource = interaction,
         color = when {
             active -> MaterialTheme.colorScheme.secondaryContainer
-            hovered -> MaterialTheme.colorScheme.surface
+            hovered -> MaterialTheme.colorScheme.surfaceVariant
             else -> Color.Transparent
         },
         shape = RoundedCornerShape(Radii.sm),
-        modifier = Modifier.fillMaxWidth()
+        // P2: полоса-индикатор рисуется ПОЗАДИ элемента, а не занимает место в ряду —
+        // иначе активный пункт сдвигал бы текст относительно неактивных.
+        modifier = Modifier.fillMaxWidth().drawBehind {
+            if (active) drawRect(
+                color = accent,
+                size = Size(indicator.toPx(), size.height)
+            )
+        }
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.width(3.dp).height(20.dp)
-                    .background(if (active) AppColors.accent else Color.Transparent, RoundedCornerShape(2.dp))
-            )
             Text(
                 title,
-                Modifier.weight(1f).padding(start = 9.dp, top = 8.dp, bottom = 8.dp),
+                Modifier.weight(1f).padding(start = 12.dp, top = 9.dp, bottom = 9.dp),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (active) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
+                style = if (active) MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold) else MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Normal),
+                color = if (active) MaterialTheme.colorScheme.onSecondaryContainer else AppColors.ink
             )
+            // Крестик всегда на месте (layout не «прыгает»), но проявляется на ховере: 0.4 → 1.
             Box(
                 Modifier.size(24.dp).clip(CircleShape).clickable { onDelete() },
                 contentAlignment = Alignment.Center
             ) {
-                if (hovered) {
-                    Icon(Icons.Outlined.Close, "удалить", Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+                Icon(
+                    Icons.Outlined.Close, "удалить", Modifier.size(14.dp),
+                    tint = AppColors.muted.copy(alpha = if (hovered) 1f else 0.4f)
+                )
             }
-            Spacer(Modifier.width(Space.xs))
+            Spacer(Modifier.width(Space.sm))
         }
     }
 }
@@ -316,28 +333,28 @@ private fun AccountSwitcher(state: ChatState, onProfile: () -> Unit) {
         Surface(
             onClick = { open = true },
             interactionSource = interaction,
-            color = hoverColor(interaction, Color.Transparent, MaterialTheme.colorScheme.surface),
-            shape = CircleShape,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(Radii.sm),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(24.dp).background(AppColors.accent, CircleShape), contentAlignment = Alignment.Center) {
+            Row(Modifier.padding(horizontal = 10.dp, vertical = Space.sm), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(Sizes.avatar).background(AppColors.accent, CircleShape), contentAlignment = Alignment.Center) {
                     Text(
                         (state.activeAccount?.name?.trim()?.firstOrNull() ?: 'П').uppercaseChar().toString(),
-                        color = MaterialTheme.colorScheme.onSecondary, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold
+                        color = MaterialTheme.colorScheme.onSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = Sans
                     )
                 }
                 Spacer(Modifier.width(Space.sm))
+                // §5.1: только имя пользователя, без второй строки-роли.
                 Column(Modifier.weight(1f)) {
                     Text(
                         state.activeAccount?.name ?: "Профиль",
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium
+                        style = MaterialTheme.typography.labelLarge, color = AppColors.ink
                     )
-                    Text("аккаунт", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Icon(Icons.Filled.KeyboardArrowDown, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(Icons.Filled.KeyboardArrowDown, null, Modifier.size(16.dp), tint = AppColors.muted)
             }
         }
         DropdownMenu(open, { open = false }) {
@@ -379,22 +396,22 @@ private fun AccountSwitcher(state: ChatState, onProfile: () -> Unit) {
 
 /** Низ сайдбара: строка с линейной иконкой и приглушённым текстом; на ховере — заливка бумаги. */
 @Composable
-private fun SidebarButton(label: String, icon: ImageVector, onClick: () -> Unit) {
+private fun SidebarButton(label: String, icon: ImageVector, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val interaction = remember { MutableInteractionSource() }
     Surface(
         onClick = onClick,
         interactionSource = interaction,
-        color = hoverColor(interaction, Color.Transparent, MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(Radii.sm),
-        modifier = Modifier.fillMaxWidth()
+        color = hoverColor(interaction, Color.Transparent, MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(Radii.xs),
+        modifier = modifier
     ) {
         Row(
             Modifier.padding(horizontal = Space.md, vertical = 9.dp),
-            horizontalArrangement = Arrangement.spacedBy(Space.md),
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(icon, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(icon, null, Modifier.size(16.dp), tint = AppColors.muted)
+            Text(label, style = MaterialTheme.typography.labelLarge, color = AppColors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -402,17 +419,34 @@ private fun SidebarButton(label: String, icon: ImageVector, onClick: () -> Unit)
 @Composable
 private fun ChatPane(state: ChatState, modifier: Modifier) {
     Column(modifier) {
-        Box(Modifier.fillMaxWidth().padding(horizontal = Space.xl, vertical = Space.lg)) {
+        Row(
+            Modifier.fillMaxWidth()
+                .padding(horizontal = Layout.paneHeaderH, vertical = Layout.paneHeaderV),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Text(
                 state.current?.title ?: "Визовый специалист",
+                Modifier.weight(1f, fill = false),
                 style = MaterialTheme.typography.titleMedium,
+                color = AppColors.ink,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            // §5.7: выбрана локальная модель → отметка в шапке панели, а не в ряду композера.
+            if (state.model.local) {
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "· локально, без облака",
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold),
+                    color = AppColors.accent
+                )
+            }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
+            // §5.3: контурный горизонт — слой 0, строго под контентом; кликов не перехватывает.
+            SkylineBackdrop()
             if (state.messages.isEmpty() && !state.loading) {
                 EmptyState(state)
             } else {
@@ -437,7 +471,7 @@ private fun ChatPane(state: ChatState, modifier: Modifier) {
                             item { ReadingColumn { TaskStatusLine(state) } }
                             item { ReadingColumn { TaskInlineActions(state) } }
                         }
-                        state.loading -> item { ReadingColumn { TypingRow(state.config.reducedMotion) } }
+                        state.loading -> item { ReadingColumn { PassportLoader(state.config.reducedMotion) } }
                     }
                 }
             }
@@ -454,24 +488,122 @@ private fun ChatPane(state: ChatState, modifier: Modifier) {
 }
 
 /** Пустое состояние: крупное serif-приветствие и чипы-подсказки — воздух вместо иллюстраций. */
+
+/**
+ * Фон чат-панели (§5.3): линейный горизонт Нью-Йорка из `nyc-skyline.svg`.
+ * Цвет линий — акцент текущей темы (в SVG обводки заданы `currentColor`), прозрачность 0.17.
+ * Если ресурса нет — просто ничего не рисуем: фон декоративен и не должен ронять экран.
+ */
+
+/**
+ * Фоновая анимация «маршрут» (§5.2, §5.9): пунктирная дуга акцентом, точки на концах и силуэт
+ * самолёта, едущий по траектории 8 с зациклённо. При «Меньше анимаций» самолёт стоит в начале
+ * маршрута — сама дуга остаётся, движение выключается.
+ */
+@Composable
+private fun RouteBackdrop(reducedMotion: Boolean, opacity: Float) {
+    val accent = AppColors.accent
+    val t by if (reducedMotion) remember { mutableStateOf(0f) }
+    else rememberInfiniteTransition(label = "route").animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(8000, easing = LinearEasing), RepeatMode.Restart),
+        label = "plane"
+    )
+    Canvas(Modifier.fillMaxSize().alpha(opacity)) {
+        val w = size.width
+        val h = size.height
+        // Дуга: от левой трети к правой, с подъёмом вверх.
+        val start = Offset(w * 0.18f, h * 0.62f)
+        val end = Offset(w * 0.82f, h * 0.38f)
+        val ctrl = Offset(w * 0.5f, h * 0.14f)
+        val path = Path().apply {
+            moveTo(start.x, start.y)
+            quadraticTo(ctrl.x, ctrl.y, end.x, end.y)
+        }
+        drawPath(
+            path = path,
+            color = accent,
+            style = Stroke(
+                width = 2.dp.toPx(),
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(2.dp.toPx(), 9.dp.toPx()))
+            )
+        )
+        drawCircle(accent, radius = 4.dp.toPx(), center = start)
+        drawCircle(accent, radius = 4.dp.toPx(), center = end)
+
+        // Точка на квадратичной кривой в момент t — позиция самолёта.
+        val u = 1f - t
+        val px = u * u * start.x + 2f * u * t * ctrl.x + t * t * end.x
+        val py = u * u * start.y + 2f * u * t * ctrl.y + t * t * end.y
+        val size1 = 7.dp.toPx()
+        val plane = Path().apply {
+            moveTo(px + size1, py)
+            lineTo(px - size1, py - size1 * 0.7f)
+            lineTo(px - size1 * 0.45f, py)
+            lineTo(px - size1, py + size1 * 0.7f)
+            close()
+        }
+        drawPath(plane, color = accent)
+    }
+}
+
+@Composable
+private fun SkylineBackdrop() {
+    val density = LocalDensity.current
+    val painter = remember(density) {
+        runCatching {
+            val loader = object {}.javaClass.classLoader ?: return@runCatching null
+            loader.getResourceAsStream("nyc-skyline.svg")?.use { loadSvgPainter(it, density) }
+        }.getOrNull()
+    }
+    if (painter != null) {
+        // P6: рисунок занимает 0.9 ширины панели и центрируется; кликов не перехватывает.
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Image(
+                painter = painter,
+                contentDescription = null,
+                modifier = Modifier.fillMaxWidth(0.9f).alpha(0.17f),
+                contentScale = ContentScale.Fit,
+                colorFilter = ColorFilter.tint(AppColors.accent)
+            )
+        }
+    }
+}
+
 @Composable
 private fun EmptyState(state: ChatState) {
-    Column(
-        Modifier.fillMaxSize().padding(horizontal = Space.xxl),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text("Чем помочь с визой?", style = MaterialTheme.typography.displaySmall)
-        Spacer(Modifier.size(Space.md))
-        Text(
-            "Опишите ситуацию — разберём документы, сроки и риски.",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(Modifier.size(Space.xxl))
-        Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
-            listOf("Какие документы нужны?", "Сроки оформления", "Риски отказа").forEach { hint ->
-                HintChip(hint) { state.input = hint; state.submitComposer() }
+    Box(Modifier.fillMaxSize()) {
+        RouteBackdrop(state.config.reducedMotion, opacity = 0.42f)
+        Column(
+            Modifier.fillMaxSize().padding(horizontal = Space.xxl),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            val name = state.activeAccount?.name?.trim().orEmpty()
+            Text(
+                if (name.isEmpty()) "Рады снова вас видеть" else "Рады снова вас видеть, $name",
+                style = MaterialTheme.typography.displayLarge,
+                color = AppColors.ink
+            )
+            Spacer(Modifier.size(Space.md))
+            Text(
+                "Опишите ситуацию — разберём документы, сроки и риски.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = AppColors.muted
+            )
+            Spacer(Modifier.size(Space.xxl))
+            // §5.2: клик по подсказке ПОДСТАВЛЯЕТ текст в композер, но не отправляет.
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                verticalArrangement = Arrangement.spacedBy(Space.sm)
+            ) {
+                listOf(
+                    "Какие документы нужны?", "Сроки оформления",
+                    "Риски отказа", "Проверить мой пакет"
+                ).forEach { hint ->
+                    HintChip(hint) { state.input = hint }
+                }
             }
         }
     }
@@ -498,95 +630,103 @@ private fun HintChip(text: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun Composer(state: ChatState) = ReadingColumn {
-    Column(Modifier.padding(horizontal = Space.sm).padding(top = Space.sm, bottom = Space.lg)) {
-        // Главный элемент экрана: самое щедрое скругление, при фокусе граница загорается терракотой.
-        val interaction = remember { MutableInteractionSource() }
-        val focused by interaction.collectIsFocusedAsState()
-        Surface(
-            shape = RoundedCornerShape(Radii.xl),
-            color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(
-                if (focused) 1.5.dp else 1.dp,
-                if (focused) AppColors.accent else MaterialTheme.colorScheme.outline
-            ),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(Modifier.padding(Space.sm)) {
-                TextField(
-                    value = state.input,
-                    onValueChange = { state.input = it },
-                    interactionSource = interaction,
-                    modifier = Modifier.fillMaxWidth().onPreviewKeyEvent { e ->
-                        if (e.key == Key.Enter && e.type == KeyEventType.KeyDown && !e.isShiftPressed) { state.submitComposer(); true } else false
-                    },
-                    placeholder = {
-                        val hint = if (state.task?.awaiting == Awaiting.ANSWER) "Ответьте на уточняющие вопросы…" else "Спросите визового специалиста…"
-                        Text(hint, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    },
-                    maxLines = 6,
-                    textStyle = MaterialTheme.typography.bodyLarge,
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                        disabledContainerColor = Color.Transparent,
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        disabledIndicatorColor = Color.Transparent
-                    )
+private fun Composer(state: ChatState) {
+    // §4: композер шире ленты (760 против 740) — он главный элемент экрана.
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+        Column(
+            Modifier.widthIn(max = Sizes.composerMaxWidth).fillMaxWidth()
+                .padding(
+                    top = Layout.composerOuterTop,
+                    start = Layout.composerOuterH,
+                    end = Layout.composerOuterH,
+                    bottom = Layout.composerOuterBottom
                 )
-                Row(Modifier.fillMaxWidth().padding(start = Space.xs, top = Space.xs), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
-                    AttachButton(state)
-                    // Инженерные витрины (MCP/коннекторы) — только в режиме разработчика (Настройки).
-                    if (state.config.developerMode) {
-                        IconActionButton(Icons.Outlined.Extension, "Инструменты MCP", { state.connectMcp() }, enabled = !state.mcpConnecting, busy = state.mcpConnecting)
-                        IconActionButton(Icons.Outlined.Tune, "Коннекторы агента", { state.openConnectors() })
-                        IconActionButton(Icons.Outlined.Storage, "Индексация знаний (RAG)", { state.rag.openRag() })
-                        IconActionButton(Icons.Outlined.Memory, "Локальная LLM", { state.localLlm.openLocalLlm() })
-                    }
-                    DropdownChip(state.model.title, Models.all, { it.title }) { state.chooseModel(it) }
-                    // Раскладка DESIGN_BRIEF.md §Раскладка: под полем — выбор модели И выбор режима памяти.
-                    MemoryChip(state)
-                    // День 27 — визуальный маркер: выбрана локальная модель → чат работает без облака.
-                    if (state.model.local) {
-                        Text(
-                            "⚡ локально",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = AppColors.accentText
+        ) {
+            val interaction = remember { MutableInteractionSource() }
+            val focused by interaction.collectIsFocusedAsState()
+            Surface(
+                shape = RoundedCornerShape(Radii.xl),
+                color = MaterialTheme.colorScheme.surface,
+                // §5.7: в фокусе рамка 1.5 акцентом. Толщина меняется вместе с цветом, поэтому
+                // обводка не сдвигает содержимое — граница рисуется внутрь скруглённой формы.
+                border = BorderStroke(if (focused) 1.5.dp else 1.dp, if (focused) AppColors.accent else MaterialTheme.colorScheme.outline),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    Modifier.padding(
+                        vertical = Layout.composerInnerV,
+                        horizontal = Layout.composerInnerH
+                    )
+                ) {
+                    TextField(
+                        value = state.input,
+                        onValueChange = { state.input = it },
+                        interactionSource = interaction,
+                        modifier = Modifier.fillMaxWidth()
+                            .heightIn(min = Layout.composerFieldMin, max = Layout.composerFieldMax)
+                            .onPreviewKeyEvent { e ->
+                                if (e.key == Key.Enter && e.type == KeyEventType.KeyDown && !e.isShiftPressed) { state.submitComposer(); true } else false
+                            },
+                        placeholder = {
+                            val hint = if (state.task?.awaiting == Awaiting.ANSWER) "Ответьте на уточняющие вопросы…" else "Спросите визового специалиста…"
+                            Text(hint, style = MaterialTheme.typography.bodyLarge, color = AppColors.muted.copy(alpha = 0.85f))
+                        },
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = AppColors.ink),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            disabledContainerColor = Color.Transparent,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            disabledIndicatorColor = Color.Transparent
                         )
+                    )
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = Space.xs),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Space.sm)
+                    ) {
+                        AttachButton(state)
+                        // Инженерные витрины (MCP/коннекторы) — только в режиме разработчика (Настройки).
+                        if (state.config.developerMode) {
+                            IconActionButton(Icons.Outlined.Extension, "Инструменты MCP", { state.connectMcp() }, enabled = !state.mcpConnecting, busy = state.mcpConnecting)
+                            IconActionButton(Icons.Outlined.Tune, "Коннекторы агента", { state.openConnectors() })
+                            IconActionButton(Icons.Outlined.Storage, "Индексация знаний (RAG)", { state.rag.openRag() })
+                            IconActionButton(Icons.Outlined.Memory, "Локальная LLM", { state.localLlm.openLocalLlm() })
+                        }
+                        DropdownChip(state.model.title, Models.all, { it.title }) { state.chooseModel(it) }
+                        MemoryChip(state)
+                        Spacer(Modifier.weight(1f))
+                        if (state.sessionTokens > 0) {
+                            val cost = if (state.sessionCost > 0) " · $%.4f".format(state.sessionCost) else ""
+                            Text(
+                                "${grouped(state.sessionTokens)} ток.$cost",
+                                style = TokenStyle,
+                                color = AppColors.muted
+                            )
+                        }
+                        SendButton(state)
                     }
-                    Spacer(Modifier.weight(1f))
-                    if (state.sessionTokens > 0) {
-                        val cost = if (state.sessionCost > 0) " · $%.4f".format(state.sessionCost) else ""
-                        Text(
-                            "${state.sessionTokens} ток.$cost",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontFamily = AppFonts.mono,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    SendButton(state)
                 }
             }
-        }
-        Row(
-            Modifier.padding(top = Space.sm, start = Space.lg),
-            horizontalArrangement = Arrangement.spacedBy(Space.xs),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                if (state.hasKey) "Enter — отправить · Shift+Enter — перенос" else "Нет ключа — откройте «Настройки» или задайте переменную окружения",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            // Эффект режима памяти виден сразу при выборе, а не после следующей отправки.
-            if (state.memoryDropped > 0) {
+            Row(
+                Modifier.padding(top = Space.sm, start = Space.md),
+                horizontalArrangement = Arrangement.spacedBy(Space.xs),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text(
-                    "· вне окна: ${state.memoryDropped} реплик",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = StatusColors.missing
+                    if (state.hasKey) "Enter — отправить · Shift+Enter — перенос" else "Нет ключа — откройте «Настройки» или задайте переменную окружения",
+                    style = TokenStyle.copy(fontFamily = Sans),
+                    color = AppColors.muted
                 )
+                // Эффект режима памяти виден сразу при выборе, а не после следующей отправки.
+                if (state.memoryDropped > 0) {
+                    Text(
+                        "· вне окна: ${state.memoryDropped} реплик",
+                        style = TokenStyle.copy(fontFamily = Sans),
+                        color = StatusColors.missing
+                    )
+                }
             }
         }
     }
@@ -596,17 +736,25 @@ private fun Composer(state: ChatState) = ReadingColumn {
 @Composable
 private fun SendButton(state: ChatState) {
     val enabled = !state.loading && state.input.isNotBlank()
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
     Surface(
         onClick = { state.submitComposer() },
         enabled = enabled,
+        interactionSource = interaction,
         shape = CircleShape,
-        color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-        modifier = Modifier.size(38.dp)
+        // §5.7: чернильная кнопка (`primary`), на ховере заливка становится акцентной.
+        color = when {
+            !enabled -> MaterialTheme.colorScheme.surfaceVariant
+            hovered -> AppColors.accent
+            else -> MaterialTheme.colorScheme.primary
+        },
+        modifier = Modifier.size(Sizes.sendButton)
     ) {
         Box(contentAlignment = Alignment.Center) {
-            val tint = if (enabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+            val tint = if (enabled) MaterialTheme.colorScheme.onPrimary else AppColors.muted
             if (state.loading) {
-                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 1.5.dp, color = tint)
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = tint)
             } else {
                 Icon(Icons.Filled.ArrowUpward, "отправить", Modifier.size(20.dp), tint = tint)
             }
@@ -665,7 +813,7 @@ private fun LocalLlmDialog(state: ChatState) {
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface
                 )
                 state.localLlm.localLlmNote?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = AppColors.accentText)
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = AppColors.accent)
                 }
                 if (state.localLlm.localLlmModels.isNotEmpty()) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -837,7 +985,7 @@ private fun RagDialog(state: ChatState) {
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface
                 )
                 state.rag.ragNote?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = AppColors.accentText)
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = AppColors.accent)
                 }
 
                 // === Шаг 1 — индекс ===
@@ -1093,7 +1241,7 @@ private fun RewriteStatusLine(t: RetrievalTrace?) {
         null, RewriteOutcome.OFF ->
             "включён — задайте вопрос и запустите поиск, чтобы увидеть результат" to onVar
         RewriteOutcome.REWRITTEN ->
-            "✏ переписал: «${t.originalQuery}» → «${t.usedQuery}»" to AppColors.accentText
+            "✏ переписал: «${t.originalQuery}» → «${t.usedQuery}»" to AppColors.accent
         RewriteOutcome.UNCHANGED ->
             "✔ вернул то же (вопрос уже краткий — переписывать нечего)" to onVar
         RewriteOutcome.FAILED ->
@@ -1111,9 +1259,9 @@ private fun RagTraceView(t: RetrievalTrace) {
     }
     Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(Radii.md), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text("Второй этап поиска (реранк + фильтр)", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelSmall, color = AppColors.accentText)
+            Text("Второй этап поиска (реранк + фильтр)", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelSmall, color = AppColors.accent)
             when (t.rewrite) {
-                RewriteOutcome.REWRITTEN -> Text("Query rewrite: «${t.originalQuery}» → «${t.usedQuery}»", style = MaterialTheme.typography.labelSmall, color = AppColors.accentText)
+                RewriteOutcome.REWRITTEN -> Text("Query rewrite: «${t.originalQuery}» → «${t.usedQuery}»", style = MaterialTheme.typography.labelSmall, color = AppColors.accent)
                 RewriteOutcome.UNCHANGED -> Text("Query rewrite включён, но запрос не изменился (вопрос уже краткий).", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 RewriteOutcome.FAILED -> Text("Query rewrite не сработал (сеть/лимит) — искали по исходному вопросу.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
                 RewriteOutcome.OFF -> {}
@@ -1123,7 +1271,7 @@ private fun RagTraceView(t: RetrievalTrace) {
             hits(t.before, MaterialTheme.colorScheme.onSurface)
             Text("top-K ПОСЛЕ (реранк+фильтр):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (t.after.isEmpty()) Text("  — пусто: нерелевантно → честный отказ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
-            else hits(t.after, AppColors.accentText)
+            else hits(t.after, AppColors.accent)
         }
     }
 }
@@ -1178,7 +1326,7 @@ private fun GoldRetrievalRow(r: GoldRetrieval) {
             Text(
                 "Нужен: ${r.q.sources.joinToString(" / ")} · было ${hitMark(r.baseHit)} → стало ${hitMark(r.improvedHit)} — $verdict",
                 style = MaterialTheme.typography.labelSmall,
-                color = if (flipped) AppColors.accentText else MaterialTheme.colorScheme.onSurfaceVariant
+                color = if (flipped) AppColors.accent else MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
@@ -1199,7 +1347,7 @@ private fun RagAnswerCard(a: RagAnswer, warn: Boolean, whatIs: String, note: Str
         if (a.sources.isNotEmpty()) {
             Text("Источники (файл › раздел · chunk_id):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             a.sources.forEach { s ->
-                Text("[${s.n}] %.3f · %s › %s · %s".format(s.score, s.source, s.section, s.chunkId), style = MaterialTheme.typography.labelSmall, color = AppColors.accentText)
+                Text("[${s.n}] %.3f · %s › %s · %s".format(s.score, s.source, s.section, s.chunkId), style = MaterialTheme.typography.labelSmall, color = AppColors.accent)
             }
         }
         if (a.citations.isNotEmpty()) {
@@ -1228,7 +1376,7 @@ private fun RagEvidence(sources: List<RagSource>, refused: Boolean) {
         sources.forEach { s ->
             Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(Radii.md), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("[${s.n}] %s › %s · %s · %.3f".format(s.source, s.section, s.chunkId, s.score), style = MaterialTheme.typography.labelSmall, color = AppColors.accentText)
+                    Text("[${s.n}] %s › %s · %s · %.3f".format(s.source, s.section, s.chunkId, s.score), style = MaterialTheme.typography.labelSmall, color = AppColors.accent)
                     ExpandableText(s.text, collapsedLines = 3)
                 }
             }
@@ -1275,7 +1423,7 @@ private fun CitationEvalRow(c: CitationCheck) {
                 "источники ${hitMark(c.sourcesPresent)} · цитаты ${hitMark(c.quotesPresent)} · смысл ${hitMark(c.faithful)}" +
                     if (c.abstained) " · «не знаю» (контекст слабый)" else ""
             }
-            Text(line, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Medium, color = if (c.pass) AppColors.accentText else MaterialTheme.colorScheme.error)
+            Text(line, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Medium, color = if (c.pass) AppColors.accent else MaterialTheme.colorScheme.error)
 
             Text("Ответ:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             ExpandableText(c.answer.text, collapsedLines = 3)
@@ -1283,7 +1431,7 @@ private fun CitationEvalRow(c: CitationCheck) {
             if (c.answer.sources.isNotEmpty()) {
                 Text("Источники (файл › раздел · chunk_id):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 c.answer.sources.forEach { s ->
-                    Text("[${s.n}] %.3f · %s › %s · %s".format(s.score, s.source, s.section, s.chunkId), style = MaterialTheme.typography.labelSmall, color = AppColors.accentText)
+                    Text("[${s.n}] %.3f · %s › %s · %s".format(s.score, s.source, s.section, s.chunkId), style = MaterialTheme.typography.labelSmall, color = AppColors.accent)
                 }
             }
             if (c.answer.citations.isNotEmpty()) {
@@ -1337,7 +1485,7 @@ private fun GoldAnswerRow(a: GoldAnswer) {
     }
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text("#${a.q.id}. ${a.q.question}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
-        Text("С RAG: $ragMark   ·   Без RAG: $plainMark", style = MaterialTheme.typography.labelSmall, color = AppColors.accentText)
+        Text("С RAG: $ragMark   ·   Без RAG: $plainMark", style = MaterialTheme.typography.labelSmall, color = AppColors.accent)
         ExpandableText("С RAG — ${a.rag.text}", collapsedLines = 2)
         ExpandableText("Без RAG — ${a.plain.text}", collapsedLines = 2)
     }
@@ -1781,7 +1929,7 @@ private fun ExpandableText(text: String, collapsedLines: Int = 6) {
             Text(
                 if (expanded) "Свернуть" else "Развернуть весь ответ",
                 style = MaterialTheme.typography.labelSmall,
-                color = AppColors.accentText,
+                color = AppColors.accent,
             )
         }
     }
@@ -1797,23 +1945,20 @@ private fun MemoryChip(state: ChatState) {
     var open by remember { mutableStateOf(false) }
     val mode = state.config.memoryMode
     Box {
+        val chipInteraction = remember { MutableInteractionSource() }
         Surface(
             onClick = { open = true },
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            shape = CircleShape
+            interactionSource = chipInteraction,
+            color = hoverColor(chipInteraction, AppColors.chip, MaterialTheme.colorScheme.surfaceVariant),
+            shape = RoundedCornerShape(Radii.pill)
         ) {
             Row(
                 Modifier.padding(start = Space.md, end = Space.sm, top = 6.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                Text(
-                    "Память: ${mode.chip}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1
-                )
-                Icon(Icons.Filled.KeyboardArrowDown, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Память: ${mode.chip}", style = MaterialTheme.typography.labelLarge, color = AppColors.ink, maxLines = 1)
+                Icon(Icons.Filled.KeyboardArrowDown, null, Modifier.size(16.dp), tint = AppColors.muted)
             }
         }
         DropdownMenu(open, { open = false }) {
@@ -1825,7 +1970,7 @@ private fun MemoryChip(state: ChatState) {
                             Text(
                                 item.title + if (active) "  ✓" else "",
                                 style = MaterialTheme.typography.labelLarge,
-                                color = if (active) AppColors.accentText else MaterialTheme.colorScheme.onSurface
+                                color = if (active) AppColors.accent else MaterialTheme.colorScheme.onSurface
                             )
                             Text(
                                 item.hint,
@@ -1849,18 +1994,31 @@ private fun <T> DropdownChip(label: String, items: List<T>, itemLabel: (T) -> St
         Surface(
             onClick = { open = true },
             interactionSource = interaction,
-            color = hoverColor(interaction, Color.Transparent, MaterialTheme.colorScheme.surfaceVariant),
-            shape = CircleShape,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+            color = hoverColor(interaction, AppColors.chip, MaterialTheme.colorScheme.surfaceVariant),
+            shape = RoundedCornerShape(Radii.pill)
         ) {
-            Row(Modifier.padding(start = Space.md, end = Space.sm, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
-                Icon(Icons.Filled.KeyboardArrowDown, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(
+                Modifier.padding(start = Space.md, end = Space.sm, top = 6.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(label, style = MaterialTheme.typography.labelLarge, color = AppColors.ink, maxLines = 1)
+                Icon(Icons.Filled.KeyboardArrowDown, null, Modifier.size(16.dp), tint = AppColors.muted)
             }
         }
-        DropdownMenu(open, { open = false }) {
+        // §5.7: меню — `surface`, граница `outline`, R14, мин. ширина 230, элементы 13/R9.
+        DropdownMenu(
+            open, { open = false },
+            modifier = Modifier.widthIn(min = 230.dp)
+                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(Radii.md))
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(Radii.md))
+        ) {
             items.forEach { item ->
-                DropdownMenuItem(text = { Text(itemLabel(item)) }, onClick = { onSelect(item); open = false })
+                DropdownMenuItem(
+                    text = { Text(itemLabel(item), style = MaterialTheme.typography.labelLarge, color = AppColors.ink) },
+                    onClick = { onSelect(item); open = false },
+                    modifier = Modifier.clip(RoundedCornerShape(9.dp))
+                )
             }
         }
     }
@@ -1873,22 +2031,31 @@ private fun <T> DropdownChip(label: String, items: List<T>, itemLabel: (T) -> St
 @Composable
 private fun MessageView(message: Message) {
     if (message.role == Role.User) {
+        // §5.4: пузырь `surfaceVariant`, R18, выключка вправо, не шире 78 % ленты.
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(Radii.lg), modifier = Modifier.widthIn(max = 560.dp)) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = RoundedCornerShape(Radii.lg),
+                modifier = Modifier.fillMaxWidth(Layout.userBubbleMaxFraction)
+            ) {
                 Text(
                     message.text,
-                    Modifier.padding(horizontal = Space.lg, vertical = Space.md),
+                    Modifier.padding(horizontal = Layout.userBubblePaddingH, vertical = Layout.userBubblePaddingV),
                     style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = AppColors.ink
                 )
             }
         }
     } else {
-        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Space.sm)) {
-            Text("Визовый специалист", style = MaterialTheme.typography.labelMedium, color = AppColors.accent, fontWeight = FontWeight.SemiBold)
+        // §5.4: ответ ассистента — без пузыря, на фоне панели; справа резерв «воздуха».
+        Column(
+            Modifier.fillMaxWidth().padding(end = Layout.assistantGutter),
+            verticalArrangement = Arrangement.spacedBy(Layout.assistantParagraphGap)
+        ) {
+            AuthorLine()
             parseSegments(message.text).forEach { seg ->
                 when (seg) {
-                    is Segment.Plain -> MarkdownText(seg.text, AppColors.accentText)
+                    is Segment.Plain -> MarkdownText(seg.text, AppColors.accent)
                     is Segment.Checklist -> ChecklistView(seg.items)
                 }
             }
@@ -1897,21 +2064,77 @@ private fun MessageView(message: Message) {
     }
 }
 
-/** Строка расхода под ответом: моноширинный чип, приглушённый — цифры не спорят с текстом. */
+/** Строка автора ответа: эмблема-глобус + подпись акцентом (P3). */
 @Composable
-private fun TokenLine(usage: TokenUsage) {
-    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant) {
+private fun AuthorLine() {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+        GlobeEmblem(Modifier.size(Sizes.emblem))
         Text(
-            "↑${usage.prompt}  ↓${usage.completion}  ·  Σ${usage.total}",
-            Modifier.padding(horizontal = Space.md, vertical = Space.xs),
-            style = MaterialTheme.typography.labelSmall,
-            fontFamily = AppFonts.mono,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            "Визовый специалист",
+            style = MaterialTheme.typography.labelMedium,
+            color = AppColors.accent
         )
     }
 }
 
-/** Чек-лист документов: бумажная карточка, в строке — линейная иконка статуса, имя и точка-бейдж. */
+/**
+ * Эмблема ассистента (P3): круг акцентом, поверх — экватор, меридиан-эллипс и контур.
+ * Глобус несёт смысл «международное, документы», а не украшает: он же стоит на обложке паспорта.
+ */
+@Composable
+private fun GlobeEmblem(modifier: Modifier = Modifier) {
+    val accent = AppColors.accent
+    Canvas(modifier) {
+        val r = size.minDimension / 2f
+        drawCircle(accent, radius = r)
+        val w = 1.1.dp.toPx()
+        val line = Color.White.copy(alpha = 0.92f)
+        // экватор
+        drawLine(line, Offset(size.width * 0.16f, r), Offset(size.width * 0.84f, r), strokeWidth = w)
+        // меридиан — эллипс
+        drawOval(
+            color = line,
+            topLeft = Offset(size.width * 0.32f, size.height * 0.14f),
+            size = Size(size.width * 0.36f, size.height * 0.72f),
+            style = Stroke(width = w)
+        )
+        // контур
+        drawCircle(line.copy(alpha = 0.5f), radius = r - w / 2f, style = Stroke(width = w))
+    }
+}
+
+/**
+ * Строка расхода под ответом (§5.4): моноширинный чип на фоне `chip`, формат
+ * «промпт 1 248 · ответ 512 · всего 1 760» — с разрядкой тысяч, чтобы числа читались.
+ */
+@Composable
+private fun TokenLine(usage: TokenUsage) {
+    Surface(shape = RoundedCornerShape(8.dp), color = AppColors.chip) {
+        Text(
+            "промпт ${grouped(usage.prompt)} · ответ ${grouped(usage.completion)} · всего ${grouped(usage.total)}",
+            Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
+            style = TokenStyle,
+            color = AppColors.muted
+        )
+    }
+}
+
+/** Разрядка тысяч неразрывным пробелом: 1760 → «1 760». */
+private fun grouped(n: Int): String {
+    val digits = n.toString()
+    val out = StringBuilder()
+    for ((idx, ch) in digits.withIndex()) {
+        if (idx > 0 && (digits.length - idx) % 3 == 0) out.append('\u00A0')
+        out.append(ch)
+    }
+    return out.toString()
+}
+
+/**
+ * Чек-лист документов (§5.4): бумажная карточка с микро-заголовком.
+ * Ряд выровнен по ВЕРХУ, а точка и чип смещены вниз на 5 и 1 — иначе на многострочном названии
+ * точка уезжает в середину абзаца вместо первой строки.
+ */
 @Composable
 private fun ChecklistView(items: List<Pair<String, String>>) {
     Surface(
@@ -1920,48 +2143,44 @@ private fun ChecklistView(items: List<Pair<String, String>>) {
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(Modifier.padding(Space.lg), verticalArrangement = Arrangement.spacedBy(Space.md)) {
+        Column(
+            Modifier.padding(horizontal = 16.dp, vertical = 15.dp),
+            verticalArrangement = Arrangement.spacedBy(11.dp)
+        ) {
+            Text("ПАКЕТ ДОКУМЕНТОВ", style = MaterialTheme.typography.labelSmall, color = AppColors.muted)
             items.forEach { (name, status) ->
                 val color = statusColor(status)
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.md)) {
-                    Icon(statusIcon(status), null, Modifier.size(17.dp), tint = color)
-                    Text(name, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-                    Box(Modifier.size(7.dp).background(color, CircleShape))
-                    Text(status, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(
+                    Modifier.fillMaxWidth(),
+                    // P4: ряд по ВЕРХУ; точка смещена на 5, чип на 1 — иначе на названии в две
+                    // строки точка уезжает в середину абзаца вместо первой строки.
+                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        Modifier.padding(top = 5.dp).size(Sizes.statusDot).background(color, CircleShape)
+                    )
+                    Text(
+                        name,
+                        Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AppColors.ink
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(Radii.pill),
+                        color = StatusColors.chipBg(color),
+                        modifier = Modifier.padding(top = 1.dp)
+                    ) {
+                        Text(
+                            status,
+                            Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.sp),
+                            color = color
+                        )
+                    }
                 }
             }
         }
-    }
-}
-
-/**
- * Индикатор набора: три терракотовые точки «дышат» по очереди (§4 — движение сдержанное).
- * При «Меньше анимаций» (Настройки) точки статичны — настройка обязана выключать и этот цикл.
- */
-@Composable
-private fun TypingRow(reducedMotion: Boolean) {
-    val transition = rememberInfiniteTransition(label = "typing")
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
-        repeat(3) { i ->
-            val breath by transition.animateFloat(
-                initialValue = 0.25f,
-                targetValue = 1f,
-                animationSpec = infiniteRepeatable(tween(620, delayMillis = i * 180), RepeatMode.Reverse),
-                label = "dot$i"
-            )
-            Box(Modifier.size(7.dp).alpha(if (reducedMotion) 0.6f else breath).background(AppColors.accent, CircleShape))
-        }
-    }
-}
-
-/** Линейная иконка статуса документа — парная к [statusColor]. */
-private fun statusIcon(status: String): ImageVector {
-    val s = status.trim().lowercase()
-    return when {
-        s.startsWith("провер") -> Icons.Outlined.CheckCircle
-        s.startsWith("загруж") -> Icons.Outlined.UploadFile
-        s.startsWith("не хват") || s.startsWith("нет") -> Icons.Outlined.WarningAmber
-        else -> Icons.Outlined.RadioButtonUnchecked
     }
 }
 
@@ -2036,8 +2255,11 @@ private fun inlineMd(text: String, accent: Color): AnnotatedString = buildAnnota
             text.startsWith("http://", i) || text.startsWith("https://", i) -> {
                 val raw = URL_REGEX.find(text, i)?.value ?: text.substring(i)
                 val url = raw.trimEnd('.', ',', ';', ')', '»', '"', '!', '?')   // не цеплять хвостовую пунктуацию
-                val styles = TextLinkStyles(SpanStyle(color = accent, textDecoration = TextDecoration.Underline))
-                withLink(LinkAnnotation.Url(url, styles) { link -> (link as? LinkAnnotation.Url)?.url?.let(::openUrl) }) { append(url) }
+                // §5.4: ссылка на официальный источник — акцентом, полужирнее текста, со стрелкой «внешняя».
+                val styles = TextLinkStyles(SpanStyle(color = accent, fontWeight = FontWeight.Medium))
+                withLink(LinkAnnotation.Url(url, styles) { link -> (link as? LinkAnnotation.Url)?.url?.let(::openUrl) }) {
+                    append(url); append(" ↗")
+                }
                 if (raw.length > url.length) append(raw.substring(url.length))
                 i += raw.length
             }
